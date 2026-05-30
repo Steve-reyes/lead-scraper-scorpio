@@ -304,7 +304,7 @@ export default function LeadsTable({ leads, selectedIds, onSelectAll, onSelectOn
 
       {/* ======== TABLE VIEW ======== */}
       {viewMode === 'table' && (
-        <div className="overflow-x-auto ios-scroll">
+        <div className="ios-scroll" style={{ overflowX: 'auto', overflowY: 'clip' }}>
           <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
             <thead>
               <tr style={{ backgroundColor: '#F9F9FB' }}>
