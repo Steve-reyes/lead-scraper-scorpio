@@ -1,0 +1,7 @@
+node_modules
+.next
+*.log
+.env
+.git-credentials
+__pycache__
+.DS_Store

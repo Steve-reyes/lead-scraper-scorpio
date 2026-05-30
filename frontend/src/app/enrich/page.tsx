@@ -1,0 +1,721 @@
+'use client';
+
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import Sidebar from '@/components/Sidebar';
+import {
+  Sparkles,
+  Search,
+  CheckSquare,
+  Square,
+  Loader2,
+  Building2,
+  ExternalLink,
+  Copy,
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  Save,
+  Globe,
+  Filter,
+  StopCircle,
+  Trash2,
+} from 'lucide-react';
+import type { Lead, WSMessage } from '@/lib/types';
+import { connectWebSocket, disconnectWS, triggerBatchEnrich, triggerDeepBatchEnrich } from '@/lib/api';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
+
+/** Enrichment status for the current page */
+type EnrichPageStatus = 'idle' | 'enriching' | 'complete' | 'error';
+type LeadEnrichState = 'pending' | 'scanning_website' | 'scanning_directories' | 'complete' | 'failed';
+
+function StatusBadge({ status }: { status: LeadEnrichState }) {
+  const config: Record<LeadEnrichState, { label: string; color: string; icon: React.ElementType }> = {
+    pending: { label: 'Pending', color: '#8E8E93', icon: Clock },
+    scanning_website: { label: 'Website', color: '#007AFF', icon: Loader2 },
+    scanning_directories: { label: 'Directories', color: '#FF9500', icon: Loader2 },
+    complete: { label: 'Done', color: '#34C759', icon: CheckCircle2 },
+    failed: { label: 'Failed', color: '#FF3B30', icon: AlertCircle },
+  };
+
+  const cfg = config[status];
+  const Icon = cfg.icon;
+
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] font-medium" style={{ color: cfg.color }}>
+      {status === 'scanning_website' || status === 'scanning_directories' ? (
+        <Icon className="w-3 h-3 animate-spin" />
+      ) : (
+        <Icon className="w-3 h-3" />
+      )}
+      {cfg.label}
+    </span>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const el = document.createElement('textarea');
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="p-1 rounded-[6px] transition-colors hover:opacity-60"
+      style={{ color: '#8E8E93' }}
+      title="Copy to clipboard"
+    >
+      <Copy className="w-[12px] h-[12px]" />
+    </button>
+  );
+}
+
+export default function EnrichPage() {
+  const [allLeads, setAllLeads] = useState<Lead[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [enrichStatus, setEnrichStatus] = useState<EnrichPageStatus>('idle');
+  const [statusMessage, setStatusMessage] = useState('');
+  const [activeListName, setActiveListName] = useState<string | null>(null);
+  const [listCollapsed, setListCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortField, setSortField] = useState<string>('');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  // WebSocket refs
+  const wsRef = useRef<WebSocket | null>(null);
+  const clientIdRef = useRef<string | null>(null);
+
+  // Keep a mutable leads map for WS updates
+  const leadsMapRef = useRef<Map<string, Lead>>(new Map());
+
+  // Track last clicked index for shift-click range selection
+  const lastClickedIndexRef = useRef<number | null>(null);
+
+  // Load imported leads from Saved Lists or restore from API
+  useEffect(() => {
+    const load = async () => {
+      try {
+        // First check for fresh import from Saved Lists page
+        const storedLeads = localStorage.getItem('enrich-import-leads');
+        const listName = localStorage.getItem('enrich-list-name');
+        if (storedLeads) {
+          const parsed: Lead[] = JSON.parse(storedLeads);
+          setAllLeads(parsed);
+          const map = new Map<string, Lead>();
+          for (const lead of parsed) {
+            map.set(lead.id, lead);
+          }
+          leadsMapRef.current = map;
+          if (listName) {
+            setActiveListName(listName);
+            setStatusMessage('Imported from saved list');
+          }
+          localStorage.removeItem('enrich-import-leads');
+          localStorage.removeItem('enrich-list-name');
+          // Also persist to API so data survives browser/device switches
+          try {
+            await fetch(`${API_BASE}/api/leads`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ leads: parsed }),
+            });
+          } catch {}
+          return;
+        }
+
+        // No fresh import — restore from API (cross-device persistence)
+        const res = await fetch(`${API_BASE}/api/leads`);
+        const data = await res.json();
+        if (data.success && Array.isArray(data.leads) && data.leads.length > 0) {
+          const parsed: Lead[] = data.leads.filter((l: Lead) => l.businessName);
+          if (parsed.length > 0) {
+            setAllLeads(parsed);
+            const map = new Map<string, Lead>();
+            for (const lead of parsed) map.set(lead.id, lead);
+            leadsMapRef.current = map;
+            setActiveListName('Restored Leads');
+            setStatusMessage(`Restored ${parsed.length} leads from server`);
+          }
+        }
+      } catch {
+        console.warn('[Enrich Page] Could not load leads from API');
+      }
+    };
+    load();
+  }, [API_BASE]);
+
+  // Connect WebSocket for enrichment streaming
+  useEffect(() => {
+    const ws = connectWebSocket(
+      (data: WSMessage) => {
+        switch (data.type) {
+          case 'lead_enriched': {
+            const { lead } = data.payload;
+            if (lead) {
+              // Update in leads map
+              leadsMapRef.current.set(lead.id, lead);
+              // Force re-render
+              setAllLeads((prev) => prev.map((l) => (l.id === lead.id ? lead : l)));
+              // Persist to API so data survives browser/device switches
+              const all = Array.from(leadsMapRef.current.values());
+              fetch(`${API_BASE}/api/leads`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ leads: all }),
+              }).catch(() => {});
+            }
+            break;
+          }
+
+          case 'enrich_complete': {
+            setEnrichStatus('complete');
+            setStatusMessage(data.payload.message || 'Enrichment complete!');
+            // Final persist to API
+            const all = Array.from(leadsMapRef.current.values());
+            fetch(`${API_BASE}/api/leads`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ leads: all }),
+            }).catch(() => {});
+            break;
+          }
+
+          case 'progress': {
+            setStatusMessage(data.payload.message || 'Processing...');
+            break;
+          }
+
+          case 'enrich_cancelled': {
+            setEnrichStatus('idle');
+            setStatusMessage(data.payload?.message || 'Stopped');
+            // Reset all scanning leads to failed so spinners disappear
+            setAllLeads((prev) =>
+              prev.map((l) =>
+                l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories'
+                  ? { ...l, enrichmentStatus: 'failed' as const, enrichmentError: 'cancelled' }
+                  : l
+              )
+            );
+            break;
+          }
+
+          case 'error': {
+            setEnrichStatus('error');
+            setStatusMessage(`Error: ${data.payload.error}`);
+            break;
+          }
+
+          case 'connected':
+          case 'registered': {
+            const cid = data.payload?.clientId;
+            if (cid) clientIdRef.current = cid;
+            console.log('[Enrich WS]', data.type, data.payload);
+            break;
+          }
+        }
+      },
+      (clientId) => {
+        clientIdRef.current = clientId;
+      },
+    );
+    wsRef.current = ws;
+
+    return () => {
+      disconnectWS();
+      wsRef.current = null;
+    };
+  }, []);
+
+  const sortLeads = (leads: Lead[]) => {
+    if (!sortField) return leads;
+    return [...leads].sort((a, b) => {
+      let aVal = '';
+      let bVal = '';
+      if (sortField === 'status') {
+        aVal = a.enrichmentStatus || '';
+        bVal = b.enrichmentStatus || '';
+      } else if (sortField === 'name') {
+        aVal = (a.businessName || '').toLowerCase();
+        bVal = (b.businessName || '').toLowerCase();
+      } else if (sortField === 'phone') {
+        aVal = (a.phone || '').toLowerCase();
+        bVal = (b.phone || '').toLowerCase();
+      } else if (sortField === 'website') {
+        aVal = (a.website || '').toLowerCase();
+        bVal = (b.website || '').toLowerCase();
+      } else if (sortField === 'email') {
+        aVal = (a.email || '').toLowerCase();
+        bVal = (b.email || '').toLowerCase();
+      }
+      if (aVal < bVal) return sortDir === 'asc' ? -1 : 1;
+      if (aVal > bVal) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  };
+
+  // Filtered leads based on search query
+  const filteredLeads = useMemo(() => {
+    let result = allLeads;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = allLeads.filter(
+        (l) =>
+          l.businessName.toLowerCase().includes(q) ||
+          (l.phone || '').includes(q) ||
+          (l.website || '').toLowerCase().includes(q) ||
+          (l.email || '').toLowerCase().includes(q) ||
+          (l.address || '').toLowerCase().includes(q),
+      );
+    }
+    return sortLeads(result);
+  }, [allLeads, searchQuery, sortField, sortDir]);
+
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
+
+  // Count enrichment stats
+  const stats = useMemo(() => {
+    const total = allLeads.length;
+    const withEmail = allLeads.filter((l) => l.email).length;
+    const withPhone = allLeads.filter((l) => l.phone).length;
+    const withWebsite = allLeads.filter((l) => l.website).length;
+    const enriched = allLeads.filter((l) => l.enrichmentStatus === 'complete').length;
+    return { total, withEmail, withPhone, withWebsite, enriched };
+  }, [allLeads]);
+
+  // Selection handlers
+  const handleSelectAll = useCallback(
+    (checked: boolean) => {
+      if (checked) {
+        setSelectedIds(new Set(filteredLeads.map((l) => l.id)));
+      } else {
+        setSelectedIds(new Set());
+      }
+    },
+    [filteredLeads],
+  );
+
+  const handleSelectOne = useCallback((id: string, checked: boolean, index?: number, shiftKey?: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+
+      if (shiftKey && index !== undefined && lastClickedIndexRef.current !== null) {
+        // Shift-click: select range from last clicked to current
+        const start = Math.min(lastClickedIndexRef.current, index);
+        const end = Math.max(lastClickedIndexRef.current, index);
+        for (let i = start; i <= end; i++) {
+          next.add(filteredLeads[i].id);
+        }
+      } else {
+        // Normal click
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+
+      if (index !== undefined) {
+        lastClickedIndexRef.current = index;
+      }
+      return next;
+    });
+  }, [filteredLeads]);
+
+  // Manually save enriched leads from this list to enriched-businesses (API)
+  const saveToEnriched = useCallback(() => {
+    const completed = allLeads.filter((l) => l.phone || l.email || l.website);
+    if (completed.length === 0) {
+      alert('No leads with data to save.');
+      return;
+    }
+    const listName = activeListName || 'Unnamed List';
+    const entry = {
+      listName,
+      leads: completed,
+      enrichedAt: new Date().toISOString(),
+    };
+    // Save to backend API — primary persistence
+    fetch(`${API_BASE}/api/enriched-groups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ listName, leads: completed, enrichedAt: entry.enrichedAt }),
+    }).catch(() => {});
+    alert(`Saved ${completed.length} leads to enriched businesses!`);
+  }, [allLeads, activeListName, API_BASE]);
+
+  // Deep enrich selected leads (uses FlareSolverr for directory sites)
+  const handleDeepEnrichSelected = useCallback(async () => {
+    const selectedLeads = allLeads.filter((l) => selectedIds.has(l.id));
+    if (selectedLeads.length === 0) return;
+
+    // Reset status immediately so user sees re-enrichment is happening
+    setAllLeads((prev) =>
+      prev.map((l) =>
+        selectedIds.has(l.id) ? { ...l, enrichmentStatus: 'scanning_website' as const, enrichmentError: undefined } : l
+      )
+    );
+    setEnrichStatus('enriching');
+    setStatusMessage(`Deep enriching ${selectedLeads.length} leads via directory sites...`);
+
+    const waitForWs = () =>
+      new Promise<void>((resolve) => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) { resolve(); return; }
+        const check = setInterval(() => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) { clearInterval(check); resolve(); }
+        }, 100);
+        setTimeout(() => { clearInterval(check); resolve(); }, 5000);
+      });
+
+    await waitForWs();
+
+    try {
+      await triggerDeepBatchEnrich(selectedLeads, clientIdRef.current || undefined);
+    } catch (error: any) {
+      setEnrichStatus('error');
+      setStatusMessage(`Error: ${error.message}`);
+    }
+  }, [allLeads, selectedIds]);
+
+  // Stop enrichment — also resets stuck scanning leads so spinners disappear
+  const handleStopEnrich = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'cancel_enrich', payload: {} }));
+    }
+    setEnrichStatus('idle');
+    setStatusMessage('');
+    // Reset any leads stuck in scanning to failed so spinners don't persist
+    setAllLeads((prev) =>
+      prev.map((l) =>
+        l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories'
+          ? { ...l, enrichmentStatus: 'failed' as const, enrichmentError: 'stopped' }
+          : l
+      )
+    );
+  }, []);
+
+  // Clear all leads from enrichment page (and from API)
+  const handleClearLeads = useCallback(() => {
+    setAllLeads([]);
+    setSelectedIds(new Set());
+    setEnrichStatus('idle');
+    setStatusMessage('');
+    fetch(`${API_BASE}/api/leads`, { method: 'DELETE' }).catch(() => {});
+  }, [API_BASE]);
+
+  const handleEnrichSelected = useCallback(async () => {
+    const selectedLeads = allLeads.filter((l) => selectedIds.has(l.id));
+    if (selectedLeads.length === 0) return;
+
+    // Reset status immediately so user sees re-enrichment is happening
+    setAllLeads((prev) =>
+      prev.map((l) =>
+        selectedIds.has(l.id) ? { ...l, enrichmentStatus: 'scanning_website' as const, enrichmentError: undefined } : l
+      )
+    );
+    setEnrichStatus('enriching');
+    setStatusMessage(`Enriching ${selectedLeads.length} leads...`);
+
+    // Wait for WS connection
+    const waitForWs = () =>
+      new Promise<void>((resolve) => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          resolve();
+          return;
+        }
+        const check = setInterval(() => {
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            clearInterval(check);
+            resolve();
+          }
+        }, 100);
+        setTimeout(() => {
+          clearInterval(check);
+          resolve();
+        }, 5000);
+      });
+
+    await waitForWs();
+
+    try {
+      await triggerBatchEnrich(selectedLeads, clientIdRef.current || undefined);
+    } catch (error: any) {
+      setEnrichStatus('error');
+      setStatusMessage(`Error: ${error.message}`);
+    }
+  }, [allLeads, selectedIds]);
+
+  // Derived state
+  const allSelected = filteredLeads.length > 0 && selectedIds.size === filteredLeads.length;
+  const isEnriching = enrichStatus === 'enriching';
+
+  return (
+    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: '#F2F2F7' }}>
+      <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
+
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <div className="px-4 sm:px-5 pt-3 pb-1">
+          <div className="ios-card p-3 sm:p-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-9 h-9 rounded-[10px] flex items-center justify-center"
+                  style={{ background: 'linear-gradient(135deg, #AF52DE, #007AFF)' }}
+                >
+                  <Sparkles className="w-4 h-4 text-white" />
+                </div>
+                <div>
+                  <h2 className="ios-title">Enrich Leads</h2>
+                  <p className="ios-caption2">
+                    {stats.total} leads · {stats.enriched} enriched · {stats.withEmail} with email
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Filter leads..."
+                    className="ios-input text-[13px] pl-8 w-[160px] sm:w-[180px] h-[34px]"
+                  />
+                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: '#8E8E93' }} />
+                </div>
+
+                {/* STOP button */}
+                {isEnriching && (
+                  <button
+                    onClick={handleStopEnrich}
+                    className="ios-btn ios-btn-danger gap-1.5 text-[13px] h-[34px] px-4"
+                  >
+                    <StopCircle className="w-3.5 h-3.5" /> Stop
+                  </button>
+                )}
+
+                {/* CLEAR button */}
+                {!isEnriching && allLeads.length > 0 && (
+                  <button
+                    onClick={handleClearLeads}
+                    className="ios-btn-secondary gap-1.5 text-[13px] h-[34px] px-4"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Clear
+                  </button>
+                )}
+
+                <button
+                  onClick={handleDeepEnrichSelected}
+                  disabled={selectedIds.size === 0 || isEnriching}
+                  className="ios-btn gap-1.5 text-[13px] h-[34px] px-4"
+                  style={{ backgroundColor: '#34C759' }}
+                >
+                  {isEnriching ? (
+                    <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Deep...</>
+                  ) : (
+                    <><Globe className="w-3.5 h-3.5" /> Deep ({selectedIds.size})</>
+                  )}
+                </button>
+
+                <button
+                  onClick={handleEnrichSelected}
+                  disabled={selectedIds.size === 0 || isEnriching}
+                  className="ios-btn gap-1.5 text-[13px] h-[34px] px-4"
+                  style={{ background: 'linear-gradient(135deg, #AF52DE, #007AFF)' }}
+                >
+                  {isEnriching ? (
+                    <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Enriching...</>
+                  ) : (
+                    <><Sparkles className="w-3.5 h-3.5" /> Enrich ({selectedIds.size})</>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {statusMessage && (
+          <div className="mx-4 sm:mx-5 mb-1 px-3.5 py-2 rounded-[8px] flex items-center gap-2 text-[12px]" style={{
+            backgroundColor:
+              enrichStatus === 'error' ? '#FFF2F2' :
+              enrichStatus === 'complete' ? '#F0FFF0' :
+              'rgba(0,122,255,0.06)',
+          }}>
+            {isEnriching && <span className="inline-block w-[6px] h-[6px] rounded-full animate-pulse" style={{ backgroundColor: '#007AFF' }} />}
+            {enrichStatus === 'complete' && <CheckCircle2 className="w-3 h-3" style={{ color: '#34C759' }} />}
+            {enrichStatus === 'error' && <AlertCircle className="w-3 h-3" style={{ color: '#FF3B30' }} />}
+            <span className="font-medium" style={{
+              color: enrichStatus === 'error' ? '#FF3B30' : enrichStatus === 'complete' ? '#34C759' : '#3A3A3C',
+            }}>{statusMessage}</span>
+          </div>
+        )}
+
+        {activeListName && (
+          <div
+            className="mx-4 sm:mx-5 mb-1 px-3.5 py-2.5 rounded-[10px] flex items-center gap-2"
+            style={{ background: 'linear-gradient(135deg, rgba(175,82,222,0.08), rgba(0,122,255,0.06))', border: '0.5px solid rgba(175,82,222,0.15)' }}
+          >
+            <div className="w-6 h-6 rounded-[7px] flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #AF52DE, #007AFF)' }}>
+              <Sparkles className="w-3 h-3 text-white" />
+            </div>
+            <span className="text-[13px] font-semibold" style={{ color: '#1C1C1E' }}>List: {activeListName}</span>
+            <span className="text-[11px]" style={{ color: '#8E8E93' }}>({allLeads.length} leads)</span>
+            <button
+              onClick={() => setListCollapsed(!listCollapsed)}
+              className="ml-2 text-[11px] font-medium ios-btn-press"
+              style={{ color: '#8E8E93' }}
+            >{listCollapsed ? 'Expand' : 'Collapse'}</button>
+            {!isEnriching && (
+              <>
+                <button
+                  onClick={() => saveToEnriched()}
+                  className="ml-auto text-[11px] font-medium ios-btn-press flex items-center gap-1"
+                  style={{ color: '#AF52DE' }}
+                ><Save className="w-3 h-3" /> Save</button>
+                <button
+                  onClick={() => { setActiveListName(null); setListCollapsed(false); }}
+                  className="text-[11px] font-medium ios-btn-press"
+                  style={{ color: '#8E8E93' }}
+                >Dismiss</button>
+              </>
+            )}
+          </div>
+        )}
+
+        {allLeads.length === 0 && (
+          <div className="flex-1 flex items-center justify-center text-center px-6">
+            <div className="max-w-md ios-page-enter">
+              <div
+                className="w-[60px] h-[60px] mx-auto mb-4 rounded-[14px] flex items-center justify-center"
+                style={{ background: 'linear-gradient(135deg, rgba(175,82,222,0.15), rgba(0,122,255,0.1))' }}
+              >
+                <Sparkles className="w-7 h-7" style={{ color: '#AF52DE' }} />
+              </div>
+              <h2 className="text-[20px] font-bold tracking-[-0.3px] mb-1" style={{ color: '#1C1C1E' }}>No leads to enrich</h2>
+              <p className="text-[14px] leading-relaxed" style={{ color: '#8E8E93' }}>
+                First, go to the <strong style={{ color: '#3A3A3C' }}>Search &amp; Scrape</strong> page and find some leads on Google Maps. Once the search completes, the leads will appear here ready for enrichment.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {allLeads.length > 0 && !listCollapsed && (
+          <div className="flex-1 overflow-auto px-4 sm:px-5 py-2 ios-scroll scrollbar-thin">
+            <div className="ios-card overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full" style={{ borderCollapse: 'separate', borderSpacing: 0 }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#F9F9FB' }}>
+                      <th className="w-10 px-3 py-3 text-left">
+                        <button onClick={() => handleSelectAll(!allSelected)} className="ios-btn-press" style={{ color: '#8E8E93' }}>
+                          {allSelected ? <CheckSquare className="w-[18px] h-[18px]" style={{ color: '#007AFF' }} /> : <Square className="w-[18px] h-[18px]" />}
+                        </button>
+                      </th>
+                      <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px] cursor-pointer select-none ios-btn-press" style={{ color: '#8E8E93' }} onClick={() => handleSort('name')}>
+                        Business {sortField === 'name' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</th>
+                      <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px] cursor-pointer select-none ios-btn-press" style={{ color: '#8E8E93' }} onClick={() => handleSort('phone')}>
+                        Phone {sortField === 'phone' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</th>
+                      <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px] cursor-pointer select-none ios-btn-press" style={{ color: '#8E8E93' }} onClick={() => handleSort('website')}>
+                        Website {sortField === 'website' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</th>
+                      <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px] cursor-pointer select-none ios-btn-press" style={{ color: '#8E8E93' }} onClick={() => handleSort('email')}>
+                        Email {sortField === 'email' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</th>
+                      <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px] cursor-pointer select-none ios-btn-press" style={{ color: '#8E8E93' }} onClick={() => handleSort('status')}>
+                        Status {sortField === 'status' ? (sortDir === 'asc' ? ' ↑' : ' ↓') : ''}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredLeads.map((lead, idx) => (
+                      <tr
+                        key={lead.id}
+                        className="lead-row-enter transition-colors"
+                        style={{
+                          borderTop: '0.5px solid #E5E5EA',
+                          backgroundColor: selectedIds.has(lead.id) ? 'rgba(175,82,222,0.04)' : undefined,
+                        }}
+                        onMouseEnter={(e) => { if (!selectedIds.has(lead.id)) e.currentTarget.style.backgroundColor = '#F9F9FB'; }}
+                        onMouseLeave={(e) => { if (!selectedIds.has(lead.id)) e.currentTarget.style.backgroundColor = 'transparent'; }}
+                      >
+                        <td className="px-3 py-3">
+                          <button onClick={(e) => handleSelectOne(lead.id, !selectedIds.has(lead.id), idx, e.shiftKey)} className="ios-btn-press" style={{ color: selectedIds.has(lead.id) ? '#AF52DE' : '#8E8E93' }}>
+                            {selectedIds.has(lead.id) ? <CheckSquare className="w-[18px] h-[18px]" style={{ color: '#AF52DE' }} /> : <Square className="w-[18px] h-[18px]" />}
+                          </button>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-[8px] flex items-center justify-center shrink-0" style={{ backgroundColor: '#E5E5EA', border: '0.5px solid #D1D1D6' }}>
+                              <Building2 className="w-3.5 h-3.5" style={{ color: '#8E8E93' }} />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-[14px] font-semibold truncate max-w-[160px]" style={{ color: '#1C1C1E' }}>{lead.businessName}</p>
+                              {lead.address && <p className="text-[11px] truncate max-w-[160px]" style={{ color: '#8E8E93' }}>{lead.address}</p>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          {lead.phone ? (
+                            <div className="flex items-center gap-1">
+                              <span className="text-[13px] font-mono" style={{ color: '#3A3A3C' }}>{lead.phone}</span>
+                              <CopyButton text={lead.phone} />
+                            </div>
+                          ) : <span className="text-[13px]" style={{ color: '#C7C7CC' }}>-</span>}
+                        </td>
+                        <td className="px-3 py-3">
+                          {lead.website ? (
+                            <a href={lead.website} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-[13px] font-medium hover:underline" style={{ color: '#007AFF' }}>
+                              <span className="truncate max-w-[110px]">{(() => { try { return new URL(lead.website).hostname; } catch { return lead.website; } })()}</span>
+                              <ExternalLink className="w-[11px] h-[11px] shrink-0" />
+                            </a>
+                          ) : <span className="text-[13px]" style={{ color: '#C7C7CC' }}>-</span>}
+                        </td>
+                        <td className="px-3 py-3">
+                          {lead.email ? (
+                            <div className="flex items-center gap-1">
+                              <span className="text-[13px] font-medium truncate max-w-[160px]" style={{ color: '#AF52DE' }}>{lead.email}</span>
+                              <CopyButton text={lead.email} />
+                            </div>
+                          ) : <span className="text-[13px]" style={{ color: '#C7C7CC' }}>-</span>}
+                        </td>
+                        <td className="px-3 py-3">
+                          <StatusBadge status={lead.enrichmentStatus as LeadEnrichState} />
+                          {lead.enrichmentError && (
+                            <p className="text-[10px] mt-0.5 truncate max-w-[100px]" style={{ color: '#FF3B30' }} title={lead.enrichmentError}>{lead.enrichmentError}</p>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="px-4 py-2.5 flex items-center justify-between" style={{ borderTop: '0.5px solid #E5E5EA', backgroundColor: '#F9F9FB' }}>
+                <p className="text-[11px] font-medium" style={{ color: '#8E8E93' }}>
+                  Showing {filteredLeads.length} of {allLeads.length} leads
+                  {selectedIds.size > 0 && <span style={{ color: '#AF52DE' }}> · {selectedIds.size} selected</span>}
+                </p>
+                <div className="flex items-center gap-3 text-[11px]" style={{ color: '#8E8E93' }}>
+                  <span>{stats.withWebsite} websites</span>
+                  <span>{stats.withPhone} phones</span>
+                  <span>{stats.withEmail} emails</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
