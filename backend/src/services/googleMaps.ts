@@ -100,8 +100,20 @@ async function extractListingRefs(page: Page): Promise<ListingRef[]> {
       const ct = card.textContent || '';
       const rm = ct.match(/\((\d+[\d,]*)\)/);
       if (rm) reviewCount = parseInt(rm[1].replace(/,/g, ''));
-      const addrEl = card.querySelector('.W4Efsd');
-      const address = addrEl?.textContent?.trim() || '';
+      let addrEl = card.querySelector('.W4Efsd');
+      let address = addrEl?.textContent?.trim() || '';
+      // Try alternate address selectors if the main one returns rating data
+      if (address && /^\d[.,\d]/.test(address) && (address.includes('(') || address.includes(')'))) {
+        const altAddr = card.querySelector('[aria-label*="Address"]') ||
+                        card.querySelector('.hfpxzc + * > .W4Efsd') ||
+                        card.querySelector('div.W4Efsd:not(:has(.MW4etd))');
+        if (altAddr) {
+          const altText = altAddr.textContent?.trim() || '';
+          if (altText && !/^\d[.,\d]/.test(altText)) {
+            address = altText;
+          }
+        }
+      }
       if (href && !href.startsWith('http')) href = 'https://www.google.com' + href;
 
       // Try to extract website directly from listing card
@@ -245,8 +257,24 @@ export async function searchGoogleMaps(request: SearchRequest): Promise<Lead[]> 
     await delay(3000, 5000);
 
     // Cookie consent — multiple languages
+    // Google now uses <input type="submit"> inside <form> (not <button>)
     try {
       const handled = await page.evaluate(() => {
+        /***** Check <input type="submit"> (new Google consent format) *****/
+        const inputList = Array.from(document.querySelectorAll('input[type="submit"]'));
+        for (const el of inputList) {
+          const input = el as HTMLInputElement;
+          const v = (input.value || '').toLowerCase();
+          if (v.includes('accept all') || v.includes('reject all') ||
+              v.includes('alle akzeptieren') || v.includes('alle ablehnen') ||
+              v.includes('aceptar todo') || v.includes('rechazar todo') ||
+              v.includes('accepter tout') || v.includes('tout accepter') ||
+              v.includes('accepteren')) {
+            input.form!.submit();
+            return true;
+          }
+        }
+        /***** Fallback: check <button> elements (older format) *****/
         for (const btn of Array.from(document.querySelectorAll('button'))) {
           const t = btn.textContent?.toLowerCase() || '';
           if (t.includes('accept all') || t.includes('reject all') ||
@@ -263,7 +291,7 @@ export async function searchGoogleMaps(request: SearchRequest): Promise<Lead[]> 
         await delay(2000, 3000);
         // Wait for redirect back to maps from consent page
         try {
-          await page.waitForFunction(() => !window.location.href.includes('consent.google'), { timeout: 15000 });
+          await page.waitForFunction(() => !window.location.href.includes('consent.google'), { timeout: 20000 });
           await delay(1000, 2000);
         } catch {
           console.log('[GMaps] Consent redirect timeout, continuing...');
@@ -355,7 +383,6 @@ export async function searchGoogleMaps(request: SearchRequest): Promise<Lead[]> 
     updatedAt: new Date().toISOString(),
   }));
 
-  await page?.close().catch(() => {});
   console.log(`[GMaps] Done. ${leads.length} results (${leads.filter(l => l.website).length} with websites).`);
   return leads;
 }
