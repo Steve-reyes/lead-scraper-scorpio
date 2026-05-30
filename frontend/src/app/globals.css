@@ -7,7 +7,8 @@
 @layer base {
   :root {
     /* iOS System Colors */
-    --ios-blue: #007AFF;
+    /* iPhone 17 Orange (Desert Titanium inspired) */
+    --ios-blue: #FF6B35;
     --ios-green: #34C759;
     --ios-red: #FF3B30;
     --ios-orange: #FF9500;
@@ -69,14 +70,14 @@
   }
 
   ::selection {
-    background-color: rgba(0, 122, 255, 0.2);
+    background-color: rgba(255, 107, 53, 0.2);
     color: var(--ios-blue);
   }
 
   /* iOS-style focus ring */
   *:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.3);
+    box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.3);
   }
 
   /* Remove default tap highlights on iOS */
@@ -154,7 +155,7 @@
   .ios-input:focus {
     background-color: var(--ios-bg-card);
     border-color: var(--ios-blue);
-    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+    box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.15);
   }
 
   .ios-input::placeholder {
@@ -172,7 +173,7 @@
   .ios-search:focus {
     background-color: var(--ios-bg-card);
     border-color: var(--ios-blue);
-    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+    box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.15);
   }
 
   .ios-search::placeholder {
@@ -340,7 +341,7 @@
     from {
       opacity: 0;
       transform: translateY(-4px);
-      background-color: rgba(0, 122, 255, 0.06);
+      background-color: rgba(255, 107, 53, 0.06);
     }
     to {
       opacity: 1;

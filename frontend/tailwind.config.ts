@@ -8,7 +8,8 @@ const config: Config = {
     extend: {
       colors: {
         // iOS System Colors
-        'ios-blue': '#007AFF',
+        // iPhone 17 Orange Theme
+        'ios-blue': '#FF6B35',
         'ios-green': '#34C759',
         'ios-red': '#FF3B30',
         'ios-orange': '#FF9500',
@@ -34,20 +35,20 @@ const config: Config = {
         'ios-card': '#FFFFFF',
         'ios-sidebar': '#1C1C1E',
         'ios-sidebar-hover': '#2C2C2E',
-        'ios-sidebar-active': '#3A3A3C',
+        'ios-sidebar-active': '#5C2E1A',
 
-        // Legacy accent mapping (so existing code still works)
+        // iPhone 17 Orange accent palette
         'accent': {
-          50: '#e6f0ff',
-          100: '#b3d4ff',
-          200: '#80b8ff',
-          300: '#4d9cff',
-          400: '#1a80ff',
-          500: '#007AFF',
-          600: '#0066D9',
-          700: '#0052B3',
-          800: '#003D8C',
-          900: '#002966',
+          50: '#FFF0E6',
+          100: '#FFD1B3',
+          200: '#FFB380',
+          300: '#FF944D',
+          400: '#FF7A1A',
+          500: '#FF6B35',
+          600: '#E55A2A',
+          700: '#CC4A1F',
+          800: '#B33A14',
+          900: '#992A0A',
         },
         'sidebar': {
           DEFAULT: '#1C1C1E',
