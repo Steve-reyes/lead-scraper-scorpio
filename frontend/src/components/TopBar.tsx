@@ -6,9 +6,11 @@ import { Search, MapPin, Globe, Navigation, Loader2 } from 'lucide-react';
 interface TopBarProps {
   onSearch: (keyword: string, location: string, country: string, radiusKm: number) => void;
   isSearching: boolean;
+  onClear?: () => void;
+  leadsCount?: number;
 }
 
-export default function TopBar({ onSearch, isSearching }: TopBarProps) {
+export default function TopBar({ onSearch, isSearching, onClear, leadsCount }: TopBarProps) {
   const [keyword, setKeyword] = useState('Dentist');
   const [location, setLocation] = useState('Austin, TX');
   const [country, setCountry] = useState('United States');
@@ -144,6 +146,21 @@ export default function TopBar({ onSearch, isSearching }: TopBarProps) {
               </>
             )}
           </button>
+
+          {/* Clear All Button — beside Find Leads */}
+          {onClear && leadsCount !== undefined && leadsCount > 0 && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="ios-btn-secondary shrink-0 gap-1.5 text-[13px] h-[40px] px-3"
+              style={{ color: '#FF3B30', borderColor: 'rgba(255,59,48,0.3)' }}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              Clear ({leadsCount})
+            </button>
+          )}
         </div>
       </form>
     </div>
