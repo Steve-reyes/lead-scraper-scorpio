@@ -311,7 +311,6 @@
 
   /* iOS bounce-style scroll */
   .ios-scroll {
-    -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
   }
 
