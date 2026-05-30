@@ -33,8 +33,8 @@ const config: Config = {
         // iOS backgrounds
         'ios-bg': '#F2F2F7',
         'ios-card': '#FFFFFF',
-        'ios-sidebar': '#1C1C1E',
-        'ios-sidebar-hover': '#2C2C2E',
+        'ios-sidebar': '#281810',
+        'ios-sidebar-hover': '#3A2215',
         'ios-sidebar-active': '#5C2E1A',
 
         // iPhone 17 Orange accent palette
@@ -51,10 +51,10 @@ const config: Config = {
           900: '#992A0A',
         },
         'sidebar': {
-          DEFAULT: '#1C1C1E',
-          hover: '#2C2C2E',
-          active: '#3A3A3C',
-          border: '#38383A',
+          DEFAULT: '#281810',
+          hover: '#3A2215',
+          active: '#5C2E1A',
+          border: '#3A2215',
         },
         'panel': {
           DEFAULT: '#FFFFFF',
