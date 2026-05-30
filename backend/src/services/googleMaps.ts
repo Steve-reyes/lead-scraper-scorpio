@@ -103,7 +103,19 @@ async function extractListingRefs(page: Page): Promise<ListingRef[]> {
       const addrEl = card.querySelector('.W4Efsd');
       const address = addrEl?.textContent?.trim() || '';
       if (href && !href.startsWith('http')) href = 'https://www.google.com' + href;
-      items.push({ name, address, rating, reviewCount, placeId, placeUrl: href, website: null });
+
+      // Try to extract website directly from listing card
+      let website: string | null = null;
+      const allCardLinks = Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href]'));
+      for (const link of allCardLinks) {
+        const lh = link.href.trim();
+        if (lh && lh.startsWith('http') && !lh.match(/google\./) && !lh.includes('gstatic') && !lh.includes('googleapis')) {
+          website = lh;
+          break;
+        }
+      }
+
+      items.push({ name, address, rating, reviewCount, placeId, placeUrl: href, website });
     });
     return items;
   });
@@ -111,6 +123,7 @@ async function extractListingRefs(page: Page): Promise<ListingRef[]> {
 
 /**
  * Open a new browser tab, navigate to a GMaps place page, extract the website link.
+ * Uses multiple strategies to find the website on modern Google Maps.
  */
 async function extractWebsiteFromPlace(browser: Browser, placeUrl: string): Promise<string | null> {
   if (!placeUrl) return null;
@@ -118,24 +131,69 @@ async function extractWebsiteFromPlace(browser: Browser, placeUrl: string): Prom
   try {
     tab = await browser.newPage();
     await tab.setUserAgent(getRandomUserAgent());
-    await tab.goto(placeUrl, { waitUntil: 'networkidle2', timeout: 20000 });
-    await new Promise((r) => setTimeout(r, 2000));
+    await tab.goto(placeUrl, { waitUntil: 'networkidle2', timeout: 25000 });
+    await delay(1500, 2500);
 
     const website = await tab.evaluate(() => {
-      // Look for a link labeled as website
-      const allLinks = Array.from(document.querySelectorAll('a[href]'));
-      let fallback: string | null = null;
-      for (const link of allLinks) {
-        const a = link as HTMLAnchorElement;
-        const href = a.href.trim();
-        if (href && href.startsWith('http') && !href.match(/google\./) && !href.includes('gstatic') && !href.includes('googleapis')) {
-          const text = a.textContent?.toLowerCase() || '';
-          const tooltip = a.getAttribute('data-tooltip')?.toLowerCase() || '';
-          if (text.includes('website') || tooltip.includes('website')) return href;
-          if (!fallback && !href.includes('maps')) fallback = href;
+      // Strategy 1: Look for <a> tag with aria-label containing "website"
+      const ariaLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>(
+        'a[aria-label*="website" i], a[aria-label*="Website" i], a[aria-label*="Web" i]'
+      ));
+      for (const link of ariaLinks) {
+        const href = link.href.trim();
+        if (href && href.startsWith('http') && !href.match(/google\./) && !href.includes('gstatic')) {
+          return href;
         }
       }
-      return fallback;
+
+      // Strategy 2: Look for any link with data-tooltip="Website"
+      const tipLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>(
+        '[data-tooltip*="Website" i], [data-tooltip*="website" i] a[href], a[data-tooltip*="Website" i]'
+      )).filter(el => el.tagName === 'A');
+      for (const link of tipLinks) {
+        const href = link.href.trim();
+        if (href && href.startsWith('http') && !href.match(/google\./)) return href;
+      }
+
+      // Strategy 3: Look for button that has role="link" and aria-label website
+      const roleLinks = Array.from(document.querySelectorAll<HTMLElement>(
+        'button[role="link"][aria-label*="website" i], button[role="link"][aria-label*="Website" i], [role="link"][aria-label*="website" i] a[href]'
+      ));
+      for (const el of roleLinks) {
+        const a = el.tagName === 'A' ? (el as HTMLAnchorElement) : el.querySelector('a[href]');
+        if (a) {
+          const href = (a as HTMLAnchorElement).href.trim();
+          if (href && href.startsWith('http') && !href.match(/google\./)) return href;
+        }
+      }
+
+      // Strategy 4: Find the website section text and get adjacent link
+      const allSections = Array.from(document.querySelectorAll('div, span'));
+      for (const section of allSections) {
+        const text = section.textContent?.toLowerCase() || '';
+        if (text.includes('website') && section.querySelector('a[href]')) {
+          const link = section.querySelector<HTMLAnchorElement>('a[href]');
+          if (link) {
+            const href = link.href.trim();
+            if (href && href.startsWith('http') && !href.match(/google\./)) return href;
+          }
+        }
+      }
+
+      // Strategy 5: Fallback — first non-Google HTTP link on the page
+      const allLinks = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'));
+      for (const link of allLinks) {
+        const href = link.href.trim();
+        if (href && href.startsWith('http') &&
+            !href.match(/google\./) &&
+            !href.includes('gstatic') &&
+            !href.includes('googleapis') &&
+            !href.includes('maps')) {
+          return href;
+        }
+      }
+
+      return null;
     });
 
     return website;
