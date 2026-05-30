@@ -1,0 +1,61 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: lead-scraper-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - /etc/letsencrypt/live/lead-scraper.212.227.153.56.sslip.io/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro
+      - /etc/letsencrypt/live/lead-scraper.212.227.153.56.sslip.io/privkey.pem:/etc/nginx/certs/privkey.pem:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: lead-scraper-frontend
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: lead-scraper-backend
+    volumes:
+      - lead_scraper_data:/app/data
+    environment:
+      - PORT=4000
+      - WS_PORT=4001
+      - NODE_ENV=production
+      - CHROME_CDP_URL=ws://browserless:3000
+      - FLARESOLVER_URL=http://flaresolverr:8191/v1
+    depends_on:
+      - flaresolverr
+    restart: unless-stopped
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: lead-scraper-flaresolverr
+    environment:
+      - LOG_LEVEL=info
+      - CAPTCHA_SOLVER=none
+    restart: unless-stopped
+
+  browserless:
+    image: browserless/chrome:latest
+    container_name: lead-scraper-browserless
+    restart: unless-stopped
+
+volumes:
+  lead_scraper_data:
