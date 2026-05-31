@@ -3,25 +3,14 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import Sidebar from '@/components/Sidebar';
 import {
-  Sparkles,
-  Search,
-  CheckSquare,
-  Square,
-  Loader2,
-  Building2,
-  ExternalLink,
-  Copy,
-  AlertCircle,
-  CheckCircle2,
-  Clock,
-  Save,
-  Globe,
-  Filter,
-  StopCircle,
-  Trash2,
+  Sparkles, Search, CheckSquare, Square, Loader2,
+  Building2, ExternalLink, Copy, AlertCircle,
+  CheckCircle2, Clock, Save, Globe, Filter,
+  StopCircle, Trash2,
 } from 'lucide-react';
 import type { Lead, WSMessage } from '@/lib/types';
 import { connectWebSocket, disconnectWS, triggerBatchEnrich, triggerDeepBatchEnrich } from '@/lib/api';
+import { useToast } from '@/components/Toast';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -80,6 +69,7 @@ function CopyButton({ text }: { text: string }) {
 }
 
 export default function EnrichPage() {
+  const { toast } = useToast();
   const [allLeads, setAllLeads] = useState<Lead[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [enrichStatus, setEnrichStatus] = useState<EnrichPageStatus>('idle');
@@ -339,7 +329,7 @@ export default function EnrichPage() {
   const saveToEnriched = useCallback(() => {
     const completed = allLeads.filter((l) => l.phone || l.email || l.website);
     if (completed.length === 0) {
-      alert('No leads with data to save.');
+      toast('No leads with data to save.', 'error');
       return;
     }
     const listName = activeListName || 'Unnamed List';
@@ -354,8 +344,8 @@ export default function EnrichPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ listName, leads: completed, enrichedAt: entry.enrichedAt }),
     }).catch(() => {});
-    alert(`Saved ${completed.length} leads to enriched businesses!`);
-  }, [allLeads, activeListName, API_BASE]);
+    toast(`Saved ${completed.length} leads to enriched businesses!`, 'success');
+  }, [allLeads, activeListName, API_BASE, toast]);
 
   // Deep enrich selected leads (uses FlareSolverr for directory sites)
   const handleDeepEnrichSelected = useCallback(async () => {

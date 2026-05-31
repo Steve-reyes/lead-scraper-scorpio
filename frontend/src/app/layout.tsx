@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import AuthGuard from '@/components/AuthGuard';
+import { ToastProvider } from '@/components/Toast';
 
 export const metadata: Metadata = {
   title: 'LeadScraper Pro — Find & Enrich Business Leads',
@@ -33,7 +34,9 @@ export default function RootLayout({
           </svg>
         </div>
         <div className="relative" style={{ zIndex: 1 }}>
-          <AuthGuard>{children}</AuthGuard>
+          <ToastProvider>
+            <AuthGuard>{children}</AuthGuard>
+          </ToastProvider>
         </div>
       </body>
     </html>

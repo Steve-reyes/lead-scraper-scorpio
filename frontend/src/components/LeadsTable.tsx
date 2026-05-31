@@ -16,6 +16,9 @@ import {
   Loader2,
   Table2,
   LayoutList,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
 } from 'lucide-react';
 import type { Lead, EnrichmentStatus, LeadSource } from '@/lib/types';
 
@@ -24,6 +27,9 @@ interface LeadsTableProps {
   selectedIds: Set<string>;
   onSelectAll: (checked: boolean) => void;
   onSelectOne: (id: string, checked: boolean) => void;
+  sortField?: string;
+  sortDir?: 'asc' | 'desc';
+  onSort?: (field: string) => void;
 }
 
 function SourceBadge({ source }: { source: LeadSource }) {
@@ -226,9 +232,26 @@ function LeadCard({ lead, selected, onToggle }: { lead: Lead; selected: boolean;
   );
 }
 
-export default function LeadsTable({ leads, selectedIds, onSelectAll, onSelectOne }: LeadsTableProps) {
+export default function LeadsTable({ leads, selectedIds, onSelectAll, onSelectOne, sortField, sortDir, onSort }: LeadsTableProps) {
   const allSelected = leads.length > 0 && selectedIds.size === leads.length;
   const [viewMode, setViewMode] = useState<'table' | 'card'>('table');
+
+  const SortIcon = ({ field }: { field: string }) => {
+    if (sortField !== field) return <ArrowUpDown className="w-3 h-3 inline ml-0.5" style={{ color: '#C7C7CC' }} />;
+    return sortDir === 'asc'
+      ? <ArrowUp className="w-3 h-3 inline ml-0.5" style={{ color: '#007AFF' }} />
+      : <ArrowDown className="w-3 h-3 inline ml-0.5" style={{ color: '#007AFF' }} />;
+  };
+
+  const SortHeader = ({ field, label }: { field: string; label: string }) => (
+    <th
+      className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px] cursor-pointer select-none ios-btn-press hover:opacity-75"
+      style={{ color: sortField === field ? '#007AFF' : '#8E8E93' }}
+      onClick={() => onSort?.(field)}
+    >
+      {label} <SortIcon field={field} />
+    </th>
+  );
 
   // Auto-detect mobile on mount
   useEffect(() => {
@@ -321,27 +344,17 @@ export default function LeadsTable({ leads, selectedIds, onSelectAll, onSelectOn
                     )}
                   </button>
                 </th>
-                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px]" style={{ color: '#8E8E93' }}>
-                  Business Name
-                </th>
+                <SortHeader field="name" label="Business Name" />
                 <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px]" style={{ color: '#8E8E93' }}>
                   Industry
                 </th>
-                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px]" style={{ color: '#8E8E93' }}>
-                  Phone
-                </th>
-                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px]" style={{ color: '#8E8E93' }}>
-                  Email
-                </th>
-                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px]" style={{ color: '#8E8E93' }}>
-                  Website
-                </th>
+                <SortHeader field="phone" label="Phone" />
+                <SortHeader field="email" label="Email" />
+                <SortHeader field="website" label="Website" />
                 <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px]" style={{ color: '#8E8E93' }}>
                   Sources
                 </th>
-                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px]" style={{ color: '#8E8E93' }}>
-                  Rating
-                </th>
+                <SortHeader field="rating" label="Rating" />
                 <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.5px]" style={{ color: '#8E8E93' }}>
                   Status
                 </th>

@@ -24,11 +24,19 @@ export default function TopBar({ onSearch, isSearching, onClear, leadsCount }: T
     onSearch(keyword.trim(), location.trim(), country, radiusKm);
   };
 
+  // Ctrl+Enter to submit
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      handleSubmit(e);
+    }
+  };
+
   return (
     <div className="px-4 sm:px-5 pt-3 pb-2" style={{ backgroundColor: '#F2F2F7' }}>
       <form
         ref={searchRef}
         onSubmit={handleSubmit}
+        onKeyDown={handleKeyDown}
         className="ios-card p-3 sm:p-4"
       >
         <div className="flex flex-col sm:flex-row gap-2 sm:gap-2.5 items-stretch sm:items-center">
