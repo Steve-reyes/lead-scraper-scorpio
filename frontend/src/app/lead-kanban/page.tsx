@@ -15,6 +15,8 @@ import {
   AlertCircle,
 } from 'lucide-react';
 
+const API = process.env.NEXT_PUBLIC_API_URL || '';
+
 const PIPELINE_STAGES = [
   { id: 'new', label: 'New Leads', color: '#007AFF' },
   { id: 'contacted', label: 'Contacted', color: '#FF9500' },
@@ -48,36 +50,68 @@ export default function LeadKanbanPage() {
   const [expandedLists, setExpandedLists] = useState<Record<string, boolean>>({});
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  // Load enriched groups from localStorage
+  // Load enriched groups from API first, fallback to localStorage
   useEffect(() => {
-    const stored = localStorage.getItem('enriched-businesses');
-    if (!stored) return;
-    try {
-      const parsed: EnrichedGroup[] = JSON.parse(stored);
-      for (const g of parsed) {
-        for (const l of g.leads) {
-          if (l.kanbanStatus !== 'contacted' && l.kanbanStatus !== 'qualified' &&
-              l.kanbanStatus !== 'closed' && l.kanbanStatus !== 'lost') {
-            // Auto-sort: no email → Incomplete, else New
-            l.kanbanStatus = (!l.email) ? 'incomplete' : 'new';
+    const load = async () => {
+      try {
+        const res = await fetch(`${API}/api/enriched-groups`);
+        const data = await res.json();
+        if (Array.isArray(data.groups) && data.groups.length > 0) {
+          const parsed: EnrichedGroup[] = data.groups;
+          for (const g of parsed) {
+            for (const l of g.leads) {
+              if (l.kanbanStatus !== 'contacted' && l.kanbanStatus !== 'qualified' &&
+                  l.kanbanStatus !== 'closed' && l.kanbanStatus !== 'lost') {
+                l.kanbanStatus = (!l.email) ? 'incomplete' : 'new';
+              }
+              l.listName = g.listName;
+            }
           }
-          l.listName = g.listName;
+          setGroups(parsed);
+          const expanded: Record<string, boolean> = {};
+          for (const g of parsed) expanded[g.listName] = true;
+          setExpandedLists(expanded);
+          return;
         }
-      }
-      setGroups(parsed);
-      // Expand all by default
-      const expanded: Record<string, boolean> = {};
-      for (const g of parsed) expanded[g.listName] = true;
-      setExpandedLists(expanded);
-    } catch {}
+      } catch {}
+
+      // Fallback: load from localStorage
+      try {
+        const stored = localStorage.getItem('enriched-businesses');
+        if (!stored) return;
+        const parsed: EnrichedGroup[] = JSON.parse(stored);
+        for (const g of parsed) {
+          for (const l of g.leads) {
+            if (l.kanbanStatus !== 'contacted' && l.kanbanStatus !== 'qualified' &&
+                l.kanbanStatus !== 'closed' && l.kanbanStatus !== 'lost') {
+              l.kanbanStatus = (!l.email) ? 'incomplete' : 'new';
+            }
+            l.listName = g.listName;
+          }
+        }
+        setGroups(parsed);
+        const expanded: Record<string, boolean> = {};
+        for (const g of parsed) expanded[g.listName] = true;
+        setExpandedLists(expanded);
+      } catch {}
+    };
+    load();
   }, []);
 
-  // Persist kanbanStatus changes back to localStorage
+  // Persist kanbanStatus changes back to localStorage and API
   useEffect(() => {
     if (groups.length === 0) return;
     try {
       localStorage.setItem('enriched-businesses', JSON.stringify(groups));
     } catch {}
+    // Also sync to API so Enriched Businesses page sees the changes
+    for (const g of groups) {
+      fetch(`${API}/api/enriched-groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ listName: g.listName, leads: g.leads, enrichedAt: g.enrichedAt }),
+      }).catch(() => {});
+    }
   }, [groups]);
 
   const moveLead = (listName: string, leadId: string, toStage: string) => {
