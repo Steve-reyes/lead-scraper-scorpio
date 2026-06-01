@@ -321,25 +321,44 @@ export async function searchGoogleMaps(request: SearchRequest): Promise<Lead[]> 
     let scrollPasses = 1;
 
     while (collectedRefs.length < maxResults && emptyScrolls < MAX_EMPTY) {
-      const newRefs = await extractListingRefs(page);
-      let added = 0;
-      for (const ref of newRefs) {
-        if (collectedRefs.length >= maxResults) break;
-        const norm = normalizeBusinessName(ref.name);
-        if (seenNames.has(norm) || !ref.placeUrl) continue;
-        seenNames.add(norm);
-        collectedRefs.push(ref);
-        added++;
+      try {
+        // Re-check page is still alive before each iteration
+        const alive = await page.evaluate(() => document.title).catch(() => null);
+        if (!alive) {
+          console.log('[GMaps] Page detached, re-navigating...');
+          await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+          await delay(3000, 5000);
+          continue;
+        }
+
+        const newRefs = await extractListingRefs(page);
+        let added = 0;
+        for (const ref of newRefs) {
+          if (collectedRefs.length >= maxResults) break;
+          const norm = normalizeBusinessName(ref.name);
+          if (seenNames.has(norm) || !ref.placeUrl) continue;
+          seenNames.add(norm);
+          collectedRefs.push(ref);
+          added++;
+        }
+        if (added === 0) { emptyScrolls++; } else { emptyScrolls = 0; }
+        console.log(`[GMaps] Collected ${collectedRefs.length}/${maxResults}`);
+
+        // Increase scroll aggressiveness as we go deeper
+        scrollPasses = Math.min(5, Math.floor(collectedRefs.length / 30) + 1);
+        await scrollResultsPanel(page, scrollPasses);
+
+        // Random 2-4s delay between scrolls to avoid rate limiting
+        await delay(2000, 4000);
+      } catch (err: any) {
+        console.log(`[GMaps] Scroll iteration error: ${err?.message?.slice(0, 80)}`);
+        emptyScrolls++;
+        // Try to recover by re-navigating
+        try {
+          await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+          await delay(3000, 5000);
+        } catch {}
       }
-      if (added === 0) { emptyScrolls++; } else { emptyScrolls = 0; }
-      console.log(`[GMaps] Collected ${collectedRefs.length}/${maxResults}`);
-
-      // Increase scroll aggressiveness as we go deeper
-      scrollPasses = Math.min(5, Math.floor(collectedRefs.length / 30) + 1);
-      await scrollResultsPanel(page, scrollPasses);
-
-      // Random 2-4s delay between scrolls to avoid rate limiting
-      await delay(2000, 4000);
     }
 
     console.log(`[GMaps] Collected ${collectedRefs.length} listings. Extracting websites...`);
