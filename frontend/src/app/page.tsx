@@ -158,7 +158,7 @@ export default function Home() {
 
       try {
         const result = await triggerSearch(
-          { keyword, location, country, radius: radiusKm, maxResults: 200 },
+          { keyword, location, country, radius: radiusKm, maxResults: 500 },
           clientIdRef.current || undefined,
         );
         setSearchStatus(result.message || `Searching Google Maps for "${keyword}" in "${location}"...`);

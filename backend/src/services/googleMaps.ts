@@ -260,7 +260,7 @@ export async function searchGoogleMaps(request: SearchRequest): Promise<Lead[]> 
     await page.setUserAgent(getRandomUserAgent());
 
     const searchTerm = radiusKm && radiusKm > 0 ? `${keyword} within ${radiusKm}km of ${location}` : `${keyword} ${location}`;
-    const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}/`;
+    const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchTerm)}/?hl=en`;
 
     console.log(`[GMaps] Loading search page...`);
     await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -317,7 +317,7 @@ export async function searchGoogleMaps(request: SearchRequest): Promise<Lead[]> 
 
     // Phase 1: Scroll + collect — aggressive scrolling
     let emptyScrolls = 0;
-    const MAX_EMPTY = 5;  // More tolerance for empty scrolls before giving up
+    const MAX_EMPTY = 10;  // More tolerance for empty scrolls before giving up
     let scrollPasses = 1;
 
     while (collectedRefs.length < maxResults && emptyScrolls < MAX_EMPTY) {
@@ -335,7 +335,7 @@ export async function searchGoogleMaps(request: SearchRequest): Promise<Lead[]> 
       console.log(`[GMaps] Collected ${collectedRefs.length}/${maxResults}`);
 
       // Increase scroll aggressiveness as we go deeper
-      scrollPasses = Math.min(3, Math.floor(collectedRefs.length / 50) + 1);
+      scrollPasses = Math.min(5, Math.floor(collectedRefs.length / 30) + 1);
       await scrollResultsPanel(page, scrollPasses);
 
       // Random 2-4s delay between scrolls to avoid rate limiting

@@ -36,7 +36,7 @@ router.post('/search', async (req: Request, res: Response) => {
       location: location.trim(),
       country: (country || 'United States').trim(),
       radiusKm: Math.min(Math.max(parseInt(radius) || 0, 0), 50),
-      maxResults: Math.min(parseInt(maxResults) || 500, 2000),
+      maxResults: Math.min(parseInt(maxResults) || 500, 5000),
     };
 
     const searchId = uuidv4().slice(0, 12);
