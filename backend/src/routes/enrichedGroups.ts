@@ -73,10 +73,12 @@ router.post('/enriched-groups', (req: Request, res: Response) => {
   }
 });
 
-// DELETE /api/enriched-groups/:name
-router.delete('/enriched-groups/:name', (req: Request, res: Response) => {
+// DELETE /api/enriched-groups?name= — query param avoids %2F path issues
+router.delete('/enriched-groups', (req: Request, res: Response) => {
   try {
-    getDb().prepare('DELETE FROM enriched_groups WHERE list_name = ?').run(req.params.name);
+    const name = req.query.name as string;
+    if (!name) return res.status(400).json({ error: 'name query param required' });
+    getDb().prepare('DELETE FROM enriched_groups WHERE list_name = ?').run(name);
     res.json({ deleted: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

@@ -100,19 +100,29 @@ async function extractListingRefs(page: Page): Promise<ListingRef[]> {
       const ct = card.textContent || '';
       const rm = ct.match(/\((\d+[\d,]*)\)/);
       if (rm) reviewCount = parseInt(rm[1].replace(/,/g, ''));
-      let addrEl = card.querySelector('.W4Efsd');
-      let address = addrEl?.textContent?.trim() || '';
-      // Try alternate address selectors if the main one returns rating data
-      if (address && /^\d[.,\d]/.test(address) && (address.includes('(') || address.includes(')'))) {
-        const altAddr = card.querySelector('[aria-label*="Address"]') ||
-                        card.querySelector('.hfpxzc + * > .W4Efsd') ||
-                        card.querySelector('div.W4Efsd:not(:has(.MW4etd))');
-        if (altAddr) {
-          const altText = altAddr.textContent?.trim() || '';
-          if (altText && !/^\d[.,\d]/.test(altText)) {
-            address = altText;
-          }
-        }
+      // Extract address from card's full text content — GMaps nests address unpredictably
+      const cardText = card.textContent || '';
+      const addressChunks = cardText
+        .split(/\n/)
+        .map(s => s.trim())
+        .filter(s => /^\d/.test(s) && /[A-Za-z]{3,}/.test(s) && s.length > 8 && s.length < 120)
+        .filter(s => !/^\d[.,\d]/.test(s) || !s.includes('(')); // exclude rating "4,8(32)"
+      let address = addressChunks[0] || '';
+      // Try bullet-split fallback if no newline match
+      if (!address) {
+        const bulletParts = cardText.split('·').map(s => s.trim()).filter(s => /^\d/.test(s) && /[A-Za-z]/.test(s) && s.length > 8 && !s.match(/^\+?\d+$/));
+        address = bulletParts[0] || '';
+      }
+      // Clean German locale text from address
+      if (address) {
+        // Strip leading category text before first bullet
+        address = address.replace(/^[^·\n]+·\s*/, '').trim();
+        // Strip opening hours suffix
+        address = address.replace(/(Geschlossen|Öffnet|Rund um die Uhr).*$/i, '').trim();
+        // Strip trailing phone
+        address = address.replace(/\s*\+\d[\d\s\-\(\)]+$/, '').trim();
+        // Remove leading icon character
+        address = address.replace(/^[]\s*/, '').trim();
       }
       if (href && !href.startsWith('http')) href = 'https://www.google.com' + href;
 

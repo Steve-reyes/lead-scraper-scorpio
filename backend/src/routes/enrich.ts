@@ -74,6 +74,7 @@ router.post('/batch', async (req: Request, res: Response) => {
 
     // Download enrichment progress per lead
     const onUpdate = (lead: Lead) => {
+      saveLead(lead);
       sendMessage({
         type: 'lead_enriched',
         payload: { lead },

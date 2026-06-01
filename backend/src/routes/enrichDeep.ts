@@ -79,6 +79,8 @@ router.post('/deep', async (req: Request, res: Response) => {
 
         enrichedLeads.push(enriched);
 
+        saveLead(enriched);
+
         sendMessage({
           type: 'lead_enriched',
           payload: {

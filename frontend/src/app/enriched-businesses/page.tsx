@@ -116,10 +116,12 @@ export default function EnrichedBusinessesPage() {
 
   const deleteGroup = async (name: string) => {
     try {
-      await fetch(`${API}/api/enriched-groups/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      await fetch(`${API}/api/enriched-groups?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
     } catch {}
     setGroups((prev) => prev.filter((g) => g.listName !== name));
     if (expandedGroup === name) setExpandedGroup(null);
+    // Also clear from localStorage fallback
+    try { localStorage.removeItem('enriched-businesses'); } catch {}
   };
 
   const filteredGroups = useMemo(() => {
