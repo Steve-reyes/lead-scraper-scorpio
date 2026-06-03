@@ -4,8 +4,7 @@
  * POST /api/enrich/deep — Enrich leads using directory site scraping
  *   via FlareSolverr (bypasses Cloudflare).
  *
- * Same streaming pattern as /api/enrich/batch but routes through FlareSolverr
- * for directory lookups instead of direct fetch.
+ * Supports hard-stop via /api/enrich/stop (shared with batch enrich).
  */
 
 import { Router, Request, Response } from 'express';
@@ -15,6 +14,7 @@ import { findInDirectoriesDeep } from '../services/directoryFlare';
 import { detectCountry } from '../utils/validators';
 import { sendToClient } from '../index';
 import { saveLead } from '../store';
+import { enrichState } from './enrichState';
 
 const router = Router();
 
@@ -25,6 +25,16 @@ router.post('/deep', async (req: Request, res: Response) => {
     if (!leads || !Array.isArray(leads) || leads.length === 0) {
       return res.status(400).json({ error: 'Leads array is required' });
     }
+
+    // Cancel any existing deep enrichment
+    if (enrichState.deepAbort) {
+      enrichState.deepAbort.abort();
+      enrichState.deepAbort = null;
+    }
+
+    // Create fresh abort controller
+    const ac = new AbortController();
+    enrichState.deepAbort = ac;
 
     console.log(`[Deep Enrich] Starting deep enrichment for ${leads.length} leads${clientId ? ` (client ${clientId})` : ''}`);
 
@@ -49,6 +59,27 @@ router.post('/deep', async (req: Request, res: Response) => {
     const enrichedLeads: Lead[] = [];
 
     for (let i = 0; i < leads.length; i++) {
+      // Check for stop signal
+      if (ac.signal.aborted) {
+        console.log('[Deep Enrich] Stopped by user request');
+        sendMessage({
+          type: 'enrich_cancelled',
+          payload: { message: 'Deep enrichment stopped by user.' },
+        });
+        // Mark remaining as cancelled
+        for (let j = i; j < leads.length; j++) {
+          const cancelled: Lead = {
+            ...leads[j],
+            enrichmentStatus: 'failed',
+            enrichmentError: 'stopped',
+            updatedAt: new Date().toISOString(),
+          };
+          enrichedLeads.push(cancelled);
+          saveLead(cancelled);
+        }
+        break;
+      }
+
       const lead = leads[i] as Lead;
       sendMessage({
         type: 'progress',
@@ -103,16 +134,26 @@ router.post('/deep', async (req: Request, res: Response) => {
       }
     }
 
-    sendMessage({
-      type: 'enrich_complete',
-      payload: {
-        totalEnriched: enrichedLeads.length,
-        message: `Deep enriched ${enrichedLeads.length} leads.`,
-      },
-    });
+    if (!ac.signal.aborted) {
+      sendMessage({
+        type: 'enrich_complete',
+        payload: {
+          totalEnriched: enrichedLeads.length,
+          message: `Deep enriched ${enrichedLeads.length} leads.`,
+        },
+      });
+    }
+
+    // Cleanup
+    if (enrichState.deepAbort === ac) {
+      enrichState.deepAbort = null;
+    }
 
   } catch (error: any) {
     console.error('[Deep Enrich] Error:', error);
+    if (enrichState.deepAbort) {
+      enrichState.deepAbort = null;
+    }
     if (req.body?.clientId && sendToClient) {
       sendToClient(req.body.clientId, {
         type: 'error',

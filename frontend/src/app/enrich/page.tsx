@@ -81,6 +81,9 @@ export default function EnrichPage() {
   const [sortField, setSortField] = useState<string>('');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
+  // Poll interval ref for stop support
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // WebSocket refs
   const wsRef = useRef<WebSocket | null>(null);
   const clientIdRef = useRef<string | null>(null);
@@ -90,6 +93,42 @@ export default function EnrichPage() {
 
   // Track last clicked index for shift-click range selection
   const lastClickedIndexRef = useRef<number | null>(null);
+
+  // Shared poll — checks /api/leads for updated enrichment status and auto-completes when done
+  const startEnrichPoll = useCallback((intervalMs = 3000) => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+    setEnrichStatus('enriching');
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(`${API_BASE}/api/leads`);
+        const d = await r.json();
+        const all = d.success ? d.leads : Array.isArray(d) ? d : [];
+        setAllLeads((prev) => {
+          const updated = prev.map((l) => {
+            const found = all.find((x: any) => x.id === l.id);
+            return found || l;
+          });
+          return updated;
+        });
+        const remaining = all.filter(
+          (l: any) => l.enrichmentStatus === 'pending' || l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories'
+        );
+        const done = all.filter((l: any) => l.enrichmentStatus === 'complete');
+        const failed = all.filter((l: any) => l.enrichmentStatus === 'failed');
+        if (remaining.length === 0) {
+          clearInterval(poll);
+          pollIntervalRef.current = null;
+          setEnrichStatus('complete');
+          setStatusMessage(`Enriched: ${done.length} done, ${failed.length} failed.`);
+        } else {
+          setStatusMessage(`Enriching... ${done.length + failed.length}/${all.length} done`);
+        }
+      } catch {}
+    }, intervalMs);
+    pollIntervalRef.current = poll;
+  }, [API_BASE]);
 
   // Load imported leads from Saved Lists or restore from API
   useEffect(() => {
@@ -135,6 +174,14 @@ export default function EnrichPage() {
             leadsMapRef.current = map;
             setActiveListName('Restored Leads');
             setStatusMessage(`Restored ${parsed.length} leads from server`);
+            // Check if any leads are still being enriched (survived browser refresh)
+            const hasRunning = parsed.some(
+              (l: Lead) => l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories' || l.enrichmentStatus === 'pending'
+            );
+            if (hasRunning) {
+              setStatusMessage(`Enrichment still running — ${parsed.filter((l: Lead) => l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories').length} leads in progress`);
+              startEnrichPoll(3000);
+            }
           }
         }
       } catch {
@@ -352,39 +399,67 @@ export default function EnrichPage() {
     const selectedLeads = allLeads.filter((l) => selectedIds.has(l.id));
     if (selectedLeads.length === 0) return;
 
-    // Reset status immediately so user sees re-enrichment is happening
     setAllLeads((prev) =>
       prev.map((l) =>
         selectedIds.has(l.id) ? { ...l, enrichmentStatus: 'scanning_website' as const, enrichmentError: undefined } : l
       )
     );
     setEnrichStatus('enriching');
-    setStatusMessage(`Deep enriching ${selectedLeads.length} leads via directory sites...`);
-
-    const waitForWs = () =>
-      new Promise<void>((resolve) => {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) { resolve(); return; }
-        const check = setInterval(() => {
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) { clearInterval(check); resolve(); }
-        }, 100);
-        setTimeout(() => { clearInterval(check); resolve(); }, 5000);
-      });
-
-    await waitForWs();
+    setStatusMessage(`Deep enriching ${selectedLeads.length} leads via REST...`);
 
     try {
-      await triggerDeepBatchEnrich(selectedLeads, clientIdRef.current || undefined);
+      // REST-only — no clientId, no WS dependency
+      const res = await fetch(`${API_BASE}/api/enrich/deep`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leads: selectedLeads }),
+      });
+      const result = await res.json();
+      setStatusMessage(`Deep enrichment started — ${result.total} leads. Polling for results...`);
+
+      // Poll for completion
+      const poll = setInterval(async () => {
+        try {
+          const r = await fetch(`${API_BASE}/api/leads`);
+          const d = await r.json();
+          const all = d.success ? d.leads : Array.isArray(d) ? d : [];
+          setAllLeads((prev) => {
+            const updated = prev.map((l) => {
+              const found = all.find((x: any) => x.id === l.id);
+              return found || l;
+            });
+            return updated;
+          });
+          const remaining = all.filter(
+            (l: any) => selectedIds.has(l.id) && (l.enrichmentStatus === 'pending' || l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories')
+          );
+          const done = all.filter((l: any) => selectedIds.has(l.id) && l.enrichmentStatus === 'complete');
+          const failed = all.filter((l: any) => selectedIds.has(l.id) && l.enrichmentStatus === 'failed');
+          if (remaining.length === 0) {
+            clearInterval(poll);
+            setEnrichStatus('complete');
+            setStatusMessage(`Deep enriched: ${done.length} done, ${failed.length} failed.`);
+          } else {
+            setStatusMessage(`Deep enriched ${done.length}/${selectedLeads.length} leads...`);
+          }
+        } catch {}
+      }, 5000);
+      pollIntervalRef.current = poll;
     } catch (error: any) {
       setEnrichStatus('error');
       setStatusMessage(`Error: ${error.message}`);
     }
   }, [allLeads, selectedIds]);
 
-  // Stop enrichment — also resets stuck scanning leads so spinners disappear
+  // Stop enrichment — POST to /api/enrich/stop + clear poll + reset spinners
   const handleStopEnrich = useCallback(() => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'cancel_enrich', payload: {} }));
+    // Clear poll interval immediately so UI stops updating
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
     }
+    // Hard-stop the backend job
+    fetch(`${API_BASE}/api/enrich/stop`, { method: 'POST' }).catch(() => {});
     setEnrichStatus('idle');
     setStatusMessage('');
     // Reset any leads stuck in scanning to failed so spinners don't persist
@@ -395,7 +470,7 @@ export default function EnrichPage() {
           : l
       )
     );
-  }, []);
+  }, [API_BASE]);
 
   // Clear all leads from enrichment page (and from API)
   const handleClearLeads = useCallback(() => {
@@ -410,38 +485,56 @@ export default function EnrichPage() {
     const selectedLeads = allLeads.filter((l) => selectedIds.has(l.id));
     if (selectedLeads.length === 0) return;
 
-    // Reset status immediately so user sees re-enrichment is happening
+    // Reset status
     setAllLeads((prev) =>
       prev.map((l) =>
         selectedIds.has(l.id) ? { ...l, enrichmentStatus: 'scanning_website' as const, enrichmentError: undefined } : l
       )
     );
     setEnrichStatus('enriching');
-    setStatusMessage(`Enriching ${selectedLeads.length} leads...`);
-
-    // Wait for WS connection
-    const waitForWs = () =>
-      new Promise<void>((resolve) => {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          resolve();
-          return;
-        }
-        const check = setInterval(() => {
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            clearInterval(check);
-            resolve();
-          }
-        }, 100);
-        setTimeout(() => {
-          clearInterval(check);
-          resolve();
-        }, 5000);
-      });
-
-    await waitForWs();
+    setStatusMessage(`Enriching ${selectedLeads.length} leads via REST...`);
 
     try {
-      await triggerBatchEnrich(selectedLeads, clientIdRef.current || undefined);
+      // REST-only — no clientId, no WS dependency
+      // Enrichment continues even if browser closes
+      const res = await fetch(`${API_BASE}/api/enrich/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leads: selectedLeads }),
+      });
+      const result = await res.json();
+      setStatusMessage(`Enrichment started — ${result.total} leads. Polling for results...`);
+
+      // Poll for completion
+      const poll = setInterval(async () => {
+        try {
+          const r = await fetch(`${API_BASE}/api/leads`);
+          const d = await r.json();
+          const all = d.success ? d.leads : Array.isArray(d) ? d : [];
+          // Update local leads with enriched data
+          setAllLeads((prev) => {
+            const updated = prev.map((l) => {
+              const found = all.find((x: any) => x.id === l.id);
+              return found || l;
+            });
+            return updated;
+          });
+          // Check if all selected are done
+          const remaining = all.filter(
+            (l: any) => selectedIds.has(l.id) && (l.enrichmentStatus === 'pending' || l.enrichmentStatus === 'scanning_website')
+          );
+          const done = all.filter((l: any) => selectedIds.has(l.id) && l.enrichmentStatus === 'complete');
+          const failed = all.filter((l: any) => selectedIds.has(l.id) && l.enrichmentStatus === 'failed');
+          if (remaining.length === 0) {
+            clearInterval(poll);
+            setEnrichStatus('complete');
+            setStatusMessage(`Enriched ${done.length} leads, ${failed.length} failed.`);
+          } else {
+            setStatusMessage(`Enriched ${done.length}/${selectedLeads.length} leads...`);
+          }
+        } catch {}
+      }, 3000);
+      pollIntervalRef.current = poll;
     } catch (error: any) {
       setEnrichStatus('error');
       setStatusMessage(`Error: ${error.message}`);
@@ -451,6 +544,9 @@ export default function EnrichPage() {
   // Derived state
   const allSelected = filteredLeads.length > 0 && selectedIds.size === filteredLeads.length;
   const isEnriching = enrichStatus === 'enriching';
+  const hasActiveJobs = isEnriching || allLeads.some(
+    (l) => l.enrichmentStatus === 'pending' || l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories'
+  );
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ backgroundColor: '#F2F2F7' }}>
@@ -488,8 +584,8 @@ export default function EnrichPage() {
                   <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: '#8E8E93' }} />
                 </div>
 
-                {/* STOP button */}
-                {isEnriching && (
+                {/* STOP button — always visible when any lead is in progress */}
+                {hasActiveJobs && (
                   <button
                     onClick={handleStopEnrich}
                     className="ios-btn ios-btn-danger gap-1.5 text-[13px] h-[34px] px-4"
@@ -499,7 +595,7 @@ export default function EnrichPage() {
                 )}
 
                 {/* CLEAR button */}
-                {!isEnriching && allLeads.length > 0 && (
+                {!hasActiveJobs && allLeads.length > 0 && (
                   <button
                     onClick={handleClearLeads}
                     className="ios-btn-secondary gap-1.5 text-[13px] h-[34px] px-4"
@@ -510,11 +606,11 @@ export default function EnrichPage() {
 
                 <button
                   onClick={handleDeepEnrichSelected}
-                  disabled={selectedIds.size === 0 || isEnriching}
+                  disabled={selectedIds.size === 0 || hasActiveJobs}
                   className="ios-btn gap-1.5 text-[13px] h-[34px] px-4"
                   style={{ backgroundColor: '#34C759' }}
                 >
-                  {isEnriching ? (
+                  {hasActiveJobs ? (
                     <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Deep...</>
                   ) : (
                     <><Globe className="w-3.5 h-3.5" /> Deep ({selectedIds.size})</>
@@ -523,11 +619,11 @@ export default function EnrichPage() {
 
                 <button
                   onClick={handleEnrichSelected}
-                  disabled={selectedIds.size === 0 || isEnriching}
+                  disabled={selectedIds.size === 0 || hasActiveJobs}
                   className="ios-btn gap-1.5 text-[13px] h-[34px] px-4"
                   style={{ background: 'linear-gradient(135deg, #AF52DE, #007AFF)' }}
                 >
-                  {isEnriching ? (
+                  {hasActiveJobs ? (
                     <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Enriching...</>
                   ) : (
                     <><Sparkles className="w-3.5 h-3.5" /> Enrich ({selectedIds.size})</>
@@ -569,7 +665,7 @@ export default function EnrichPage() {
               className="ml-2 text-[11px] font-medium ios-btn-press"
               style={{ color: '#8E8E93' }}
             >{listCollapsed ? 'Expand' : 'Collapse'}</button>
-            {!isEnriching && (
+            {!hasActiveJobs && (
               <>
                 <button
                   onClick={() => saveToEnriched()}
