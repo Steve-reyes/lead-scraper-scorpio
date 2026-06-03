@@ -74,7 +74,10 @@ export default function EnrichPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [enrichStatus, setEnrichStatus] = useState<EnrichPageStatus>('idle');
   const [statusMessage, setStatusMessage] = useState('');
-  const [activeListName, setActiveListName] = useState<string | null>(null);
+  const [activeListName, setActiveListName] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('enrich-list-name');
+    return null;
+  });
   const [listCollapsed, setListCollapsed] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -96,6 +99,13 @@ export default function EnrichPage() {
 
   // Track last clicked index for shift-click range selection
   const lastClickedIndexRef = useRef<number | null>(null);
+
+  // Persist list name to localStorage so it survives page refresh
+  useEffect(() => {
+    if (activeListName) {
+      localStorage.setItem('enrich-list-name', activeListName);
+    }
+  }, [activeListName]);
 
   // Shared poll — checks /api/leads for updated enrichment status and auto-completes when done
   const startEnrichPoll = useCallback((intervalMs = 3000) => {
@@ -175,7 +185,9 @@ export default function EnrichPage() {
             const map = new Map<string, Lead>();
             for (const lead of parsed) map.set(lead.id, lead);
             leadsMapRef.current = map;
-            setActiveListName('Restored Leads');
+            // Keep the existing list name from localStorage; fall back to a default
+            const savedName = localStorage.getItem('enrich-list-name');
+            if (!savedName) setActiveListName('Imported Leads');
             setStatusMessage(`Restored ${parsed.length} leads from server`);
             // Check if any leads are still being enriched (survived browser refresh)
             const hasRunning = parsed.some(
@@ -797,7 +809,7 @@ export default function EnrichPage() {
                   style={{ color: '#AF52DE' }}
                 ><Save className="w-3 h-3" /> Save</button>
                 <button
-                  onClick={() => { setActiveListName(null); setListCollapsed(false); }}
+                  onClick={() => { setActiveListName(null); localStorage.removeItem('enrich-list-name'); setListCollapsed(false); }}
                   className="text-[11px] font-medium ios-btn-press"
                   style={{ color: '#8E8E93' }}
                 >Dismiss</button>
