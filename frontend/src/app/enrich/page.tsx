@@ -116,7 +116,7 @@ export default function EnrichPage() {
           return updated;
         });
         const remaining = all.filter(
-          (l: any) => l.enrichmentStatus === 'pending' || l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories'
+          (l: any) => l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories'
         );
         const done = all.filter((l: any) => l.enrichmentStatus === 'complete');
         const failed = all.filter((l: any) => l.enrichmentStatus === 'failed');
@@ -179,7 +179,7 @@ export default function EnrichPage() {
             setStatusMessage(`Restored ${parsed.length} leads from server`);
             // Check if any leads are still being enriched (survived browser refresh)
             const hasRunning = parsed.some(
-              (l: Lead) => l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories' || l.enrichmentStatus === 'pending'
+              (l: Lead) => l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories'
             );
             if (hasRunning) {
               setStatusMessage(`Enrichment still running — ${parsed.filter((l: Lead) => l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories').length} leads in progress`);
@@ -659,7 +659,7 @@ export default function EnrichPage() {
   const allSelected = filteredLeads.length > 0 && selectedIds.size === filteredLeads.length;
   const isEnriching = enrichStatus === 'enriching';
   const hasActiveJobs = isEnriching || allLeads.some(
-    (l) => l.enrichmentStatus === 'pending' || l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories'
+    (l) => l.enrichmentStatus === 'scanning_website' || l.enrichmentStatus === 'scanning_directories'
   );
 
   return (
