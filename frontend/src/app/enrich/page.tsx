@@ -6,7 +6,7 @@ import {
   Sparkles, Search, CheckSquare, Square, Loader2,
   Building2, ExternalLink, Copy, AlertCircle,
   CheckCircle2, Clock, Save, Globe, Filter,
-  StopCircle, Trash2,
+  StopCircle, Trash2, Download, Upload,
 } from 'lucide-react';
 import type { Lead, WSMessage } from '@/lib/types';
 import { connectWebSocket, disconnectWS, triggerBatchEnrich, triggerDeepBatchEnrich } from '@/lib/api';
@@ -80,6 +80,9 @@ export default function EnrichPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortField, setSortField] = useState<string>('');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [savedLists, setSavedLists] = useState<{ name: string; leadCount: number }[]>([]);
+  const [importTab, setImportTab] = useState<'list' | 'csv'>('list');
 
   // Poll interval ref for stop support
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -481,6 +484,117 @@ export default function EnrichPage() {
     fetch(`${API_BASE}/api/leads`, { method: 'DELETE' }).catch(() => {});
   }, [API_BASE]);
 
+  // Open import modal — fetch saved lists
+  const handleOpenImport = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/saved-lists`);
+      const data = await res.json();
+      setSavedLists(data.lists || []);
+    } catch {
+      setSavedLists([]);
+    }
+    setImportTab('list');
+    setShowImportModal(true);
+  }, [API_BASE]);
+
+  // Import leads from a saved list
+  const handleImportFromList = useCallback(async (listName: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/saved-lists`);
+      const data = await res.json();
+      const list = (data.lists || []).find((l: any) => l.name === listName);
+      if (!list || !Array.isArray(list.leads)) return;
+      const leads: Lead[] = list.leads;
+      setAllLeads(leads);
+      const map = new Map<string, Lead>();
+      for (const lead of leads) map.set(lead.id, lead);
+      leadsMapRef.current = map;
+      setActiveListName(listName);
+      setStatusMessage(`Imported ${leads.length} leads from "${listName}"`);
+      setShowImportModal(false);
+      // Persist to API
+      await fetch(`${API_BASE}/api/leads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leads }),
+      }).catch(() => {});
+    } catch {}
+  }, [API_BASE]);
+
+  // Parse CSV and import leads
+  const handleImportCSV = useCallback(async (file: File) => {
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) {
+        toast('CSV must have a header row and at least one data row.', 'error');
+        return;
+      }
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
+      const colMap: Record<string, number> = {};
+      headers.forEach((h, i) => { colMap[h] = i; });
+      // Map common column names
+      const nameCol = colMap['businessname'] ?? colMap['business name'] ?? colMap['name'] ?? colMap['company'] ?? colMap['company name'];
+      const phoneCol = colMap['phone'] ?? colMap['telephone'] ?? colMap['tel'] ?? colMap['phonenumber'] ?? colMap['phone number'];
+      const emailCol = colMap['email'] ?? colMap['e-mail'] ?? colMap['mail'] ?? colMap['email address'];
+      const websiteCol = colMap['website'] ?? colMap['web'] ?? colMap['site'] ?? colMap['url'];
+      const addressCol = colMap['address'] ?? colMap['full address'] ?? colMap['location'];
+      const cityCol = colMap['city'] ?? colMap['town'];
+      const countryCol = colMap['country'];
+      const industryCol = colMap['industry'] ?? colMap['category'] ?? colMap['keyword'];
+
+      if (nameCol === undefined) {
+        toast('CSV must have a "businessName" or "name" column.', 'error');
+        return;
+      }
+
+      const leads: Lead[] = [];
+      for (let i = 1; i < lines.length; i++) {
+        const vals = lines[i].split(',').map(v => v.trim().replace(/^['"]|['"]$/g, ''));
+        const name = vals[nameCol]?.trim();
+        if (!name) continue;
+        leads.push({
+          id: `csv-${i}-${Date.now()}`,
+          businessName: name,
+          phone: phoneCol !== undefined ? vals[phoneCol]?.trim() || '' : '',
+          email: emailCol !== undefined ? vals[emailCol]?.trim() || '' : '',
+          website: websiteCol !== undefined ? vals[websiteCol]?.trim() || '' : '',
+          address: addressCol !== undefined ? vals[addressCol]?.trim() || '' : '',
+          city: cityCol !== undefined ? vals[cityCol]?.trim() || '' : '',
+          country: countryCol !== undefined ? vals[countryCol]?.trim() || '' : '',
+          industry: industryCol !== undefined ? vals[industryCol]?.trim() || '' : '',
+          enrichmentStatus: 'pending',
+          sources: [],
+          socialLinks: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      if (leads.length === 0) {
+        toast('No valid leads found in CSV.', 'error');
+        return;
+      }
+
+      setAllLeads(leads);
+      const map = new Map<string, Lead>();
+      for (const lead of leads) map.set(lead.id, lead);
+      leadsMapRef.current = map;
+      setActiveListName(file.name.replace(/\.csv$/i, ''));
+      setStatusMessage(`Imported ${leads.length} leads from CSV`);
+      setShowImportModal(false);
+      // Persist to API
+      await fetch(`${API_BASE}/api/leads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leads }),
+      }).catch(() => {});
+      toast(`Imported ${leads.length} leads from CSV!`, 'success');
+    } catch (e: any) {
+      toast(`CSV import failed: ${e.message}`, 'error');
+    }
+  }, [API_BASE, toast]);
+
   const handleEnrichSelected = useCallback(async () => {
     const selectedLeads = allLeads.filter((l) => selectedIds.has(l.id));
     if (selectedLeads.length === 0) return;
@@ -601,6 +715,16 @@ export default function EnrichPage() {
                     className="ios-btn-secondary gap-1.5 text-[13px] h-[34px] px-4"
                   >
                     <Trash2 className="w-3.5 h-3.5" /> Clear
+                  </button>
+                )}
+
+                {/* IMPORT button */}
+                {!hasActiveJobs && (
+                  <button
+                    onClick={handleOpenImport}
+                    className="ios-btn-secondary gap-1.5 text-[13px] h-[34px] px-4"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Import
                   </button>
                 )}
 
@@ -798,6 +922,105 @@ export default function EnrichPage() {
                   <span>{stats.withEmail} emails</span>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Import Modal ── */}
+        {showImportModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center"
+            style={{ backgroundColor: 'rgba(0,0,0,0.4)' }}
+            onClick={() => setShowImportModal(false)}
+          >
+            <div
+              className="ios-card w-[400px] max-w-[90vw] max-h-[80vh] overflow-auto p-0"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 pt-4 pb-3" style={{ borderBottom: '0.5px solid #E5E5EA' }}>
+                <h3 className="text-[17px] font-semibold" style={{ color: '#1C1C1E' }}>Import Leads</h3>
+                <button onClick={() => setShowImportModal(false)} className="text-[15px] font-medium ios-btn-press" style={{ color: '#007AFF' }}>Cancel</button>
+              </div>
+
+              {/* Tabs */}
+              <div className="flex border-b" style={{ borderColor: '#E5E5EA' }}>
+                <button
+                  onClick={() => setImportTab('list')}
+                  className="flex-1 py-2.5 text-[13px] font-semibold text-center transition-colors"
+                  style={{
+                    color: importTab === 'list' ? '#007AFF' : '#8E8E93',
+                    borderBottom: importTab === 'list' ? '2px solid #007AFF' : '2px solid transparent',
+                  }}
+                >From Saved List</button>
+                <button
+                  onClick={() => setImportTab('csv')}
+                  className="flex-1 py-2.5 text-[13px] font-semibold text-center transition-colors"
+                  style={{
+                    color: importTab === 'csv' ? '#007AFF' : '#8E8E93',
+                    borderBottom: importTab === 'csv' ? '2px solid #007AFF' : '2px solid transparent',
+                  }}
+                >From CSV File</button>
+              </div>
+
+              {/* Saved List tab */}
+              {importTab === 'list' && (
+                <div className="p-4">
+                  {savedLists.length === 0 ? (
+                    <p className="text-[14px] text-center py-6" style={{ color: '#8E8E93' }}>
+                      No saved lists found. Go to <strong style={{ color: '#3A3A3C' }}>Saved Lists</strong> to create one first.
+                    </p>
+                  ) : (
+                    <div className="space-y-1 max-h-[300px] overflow-auto">
+                      {savedLists.map((list) => (
+                        <button
+                          key={list.name}
+                          onClick={() => handleImportFromList(list.name)}
+                          className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-[10px] text-left transition-colors hover:opacity-80"
+                          style={{ backgroundColor: '#F2F2F7' }}
+                        >
+                          <span className="text-[14px] font-medium truncate" style={{ color: '#1C1C1E' }}>{list.name}</span>
+                          <span className="text-[12px] shrink-0 ml-2" style={{ color: '#8E8E93' }}>{list.leadCount} leads</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* CSV tab */}
+              {importTab === 'csv' && (
+                <div className="p-4">
+                  <label
+                    className="flex flex-col items-center justify-center py-10 px-4 rounded-[12px] border-2 border-dashed cursor-pointer transition-colors"
+                    style={{ borderColor: '#C7C7CC', backgroundColor: '#F9F9FB' }}
+                    onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.borderColor = '#007AFF'; }}
+                    onDragLeave={(e) => { e.currentTarget.style.borderColor = '#C7C7CC'; }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.currentTarget.style.borderColor = '#C7C7CC';
+                      const file = e.dataTransfer.files[0];
+                      if (file) handleImportCSV(file);
+                    }}
+                  >
+                    <Upload className="w-8 h-8 mb-2" style={{ color: '#8E8E93' }} />
+                    <p className="text-[14px] font-medium mb-1" style={{ color: '#3A3A3C' }}>Drop CSV file here or click to browse</p>
+                    <p className="text-[11px]" style={{ color: '#8E8E93' }}>
+                      Columns: businessName, phone, email, website, address, city, country
+                    </p>
+                    <input
+                      type="file"
+                      accept=".csv"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleImportCSV(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                </div>
+              )}
             </div>
           </div>
         )}
