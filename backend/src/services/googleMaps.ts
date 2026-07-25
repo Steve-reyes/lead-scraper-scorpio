@@ -100,8 +100,23 @@ async function extractListingRefs(page: Page): Promise<ListingRef[]> {
       const ct = card.textContent || '';
       const rm = ct.match(/\((\d+[\d,]*)\)/);
       if (rm) reviewCount = parseInt(rm[1].replace(/,/g, ''));
+      // Extract just the clean street address — strip category labels & opening hours
+      // The card text includes category, address, hours, phone. We want the street address.
       const addrEl = card.querySelector('.W4Efsd');
-      const address = addrEl?.textContent?.trim() || '';
+      let address = addrEl?.textContent?.trim() || '';
+      // Split by · (bullet), take the first line that looks like a real street address
+      // (contains numbers + street-like words, or starts with a digit/direction)
+      if (address) {
+        const parts = address.split('·').map(s => s.trim()).filter(Boolean);
+        const streetAddr = parts.find(p =>
+          /^\d/.test(p) ||                          // starts with a number
+          /[0-9]/.test(p) && !/^(heizungs|klima|geschlossen|öffnet|rund um die)/i.test(p)
+        );
+        if (streetAddr) address = streetAddr;
+        // Remove trailing hours/phone that may be attached (no comma/period separation)
+        address = address.replace(/(Geschlossen|Öffnet|Rund um die Uhr).*$/i, '').trim();
+        address = address.replace(/\s*\+\d[\d\s-]+$/, '').trim();  // trailing phone
+      }
       if (href && !href.startsWith('http')) href = 'https://www.google.com' + href;
       items.push({ name, address, rating, reviewCount, placeId, placeUrl: href, website: null });
     });
