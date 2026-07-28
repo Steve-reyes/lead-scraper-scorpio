@@ -33,14 +33,20 @@ SERVICE="HVAC"
 echo "=== $SERVICE PIPELINE: $CITY ($VPS) ==="
 echo ""
 
+# Copy helper scripts into container
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+for js in cleanup.js trigger_enrich.js poll_status.js save_enriched.js; do
+  if [ -f "$SCRIPT_DIR/$js" ]; then
+    docker cp "$SCRIPT_DIR/$js" $BCK:/app/ 2>/dev/null && echo "  Copied $js"
+  fi
+done
+
 # --- STEP 1: CLEAN ---
 echo "=== 1/7: CLEAN ==="
 echo "  leads table..."
 docker exec $BCK sh -c "sqlite3 /app/data/leads.db 'DELETE FROM leads;'"
-echo "  enriched groups..."
-docker exec $BCK sh -c "node -e \"const http=require('http');const opts={hostname:'localhost',port:$INT_PORT,path:'/api/enriched-groups',method:'GET'};const req=http.request(opts,(res)=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>{(JSON.parse(d).groups||[]).forEach(g=>{http.request({hostname:'localhost',port:$INT_PORT,path:'/api/enriched-groups/'+encodeURIComponent(g.listName),method:'DELETE'}).end()})})});req.end()\\\""
-echo "  saved lists..."
-docker exec $BCK sh -c "node -e \"const http=require('http');const opts={hostname:'localhost',port:$INT_PORT,path:'/api/saved-lists',method:'GET'};const req=http.request(opts,(res)=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>{(JSON.parse(d).lists||[]).forEach(l=>{http.request({hostname:'localhost',port:$INT_PORT,path:'/api/saved-lists/'+encodeURIComponent(l.name),method:'DELETE'}).end()})})});req.end()\\\""
+echo "  enriched groups + saved lists..."
+docker exec -w /app $BCK node cleanup.js
 echo "  Done"
 
 # --- STEP 2: SEARCH ---
@@ -73,21 +79,13 @@ echo "  Exported"
 
 # --- STEP 5: ENRICH ---
 echo "=== 5/7: ENRICH ==="
-docker exec $BCK sh -c "node -e \"const fs=require('fs');const http=require('http');const leads=JSON.parse(fs.readFileSync('/tmp/pending_leads.json','utf8'));console.log('  Enriching',leads.length,'leads');const payload=JSON.stringify({leads:leads});const opts={hostname:'localhost',port:$INT_PORT,path:'/api/enrich/batch',method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)}};const req=http.request(opts,(res)=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>console.log('  Response:',d))});req.on('error',e=>console.error(e));req.write(payload);req.end()\\\""
+docker exec -w /app $BCK node trigger_enrich.js
+sleep 5
 
 echo "  Polling enrichment..."
-docker exec $BCK sh -c "cat > /tmp/check_status.js << 'SCRIPT'
-const D=require('better-sqlite3');
-const db=new D('/app/data/leads.db');
-const r=db.prepare('SELECT enrichment_status, COUNT(*) as cnt FROM leads GROUP BY enrichment_status').all();
-const left=r.reduce((a,x)=>a+(x.enrichment_status!='complete'&&x.enrichment_status!='failed'?x.cnt:0),0);
-const e=db.prepare(\"SELECT COUNT(*) as total, SUM(CASE WHEN email!='' OR enriched_email!='' THEN 1 ELSE 0 END) as emails FROM leads\").all();
-console.log(left+' remaining | '+e[0].emails+'/'+e[0].total+' emails');
-SCRIPT"
-
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   sleep 30
-  STATUS=$(docker exec -w /app $BCK node /tmp/check_status.js 2>&1)
+  STATUS=$(docker exec -w /app $BCK node poll_status.js 2>&1)
   echo "  [$(date '+%H:%M')] $STATUS"
   LEFT=$(echo "$STATUS" | grep -o '^[0-9]*')
   if [ "$LEFT" = "0" ]; then
@@ -98,7 +96,7 @@ done
 
 # --- STEP 6: SAVE TO ENRICHED GROUPS (city only) ---
 echo "=== 6/7: SAVE TO ENRICHED GROUPS ==="
-docker exec $BCK sh -c "node -e \"const D=require('better-sqlite3');const db=new D('/app/data/leads.db');const leads=db.prepare('SELECT id,business_name as businessName,phone,website,address,city,rating,reviews,category,email,enriched_email as enrichedEmail FROM leads WHERE city=?').all('$CITY');const d=new Date().toISOString().split('T')[0];const name='$CITY $SERVICE - '+d;const http=require('http');const payload=JSON.stringify({listName:name,leads:leads});const opts={hostname:'localhost',port:$INT_PORT,path:'/api/enriched-groups',method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)}};const req=http.request(opts,(res)=>{let s='';res.on('data',c=>s+=c);res.on('end',()=>console.log('  Saved:',s))});req.on('error',e=>console.error(e));req.write(payload);req.end()\\\""
+docker exec -w /app $BCK node save_enriched.js "$CITY"
 
 # --- STEP 7: REPORT ---
 echo "=== 7/7: REPORT ==="
