@@ -83,7 +83,9 @@ docker exec -w /app $BCK node trigger_enrich.js
 sleep 5
 
 echo "  Polling enrichment..."
-for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+i=0
+while [ $i -lt 100 ]; do
+  i=$((i + 1))
   sleep 30
   STATUS=$(docker exec -w /app $BCK node poll_status.js 2>&1)
   echo "  [$(date '+%H:%M')] $STATUS"
