@@ -13,7 +13,8 @@ const city = process.argv[2] || 'Unknown';
 const service = process.argv[3] || 'HVAC';
 const port = parseInt(process.argv[4] || '4000', 10);
 
-const leads = db.prepare("SELECT id, business_name as businessName, phone, website, address, city, rating, reviews, category, email, enriched_email as enrichedEmail FROM leads WHERE city LIKE ? AND enrichment_status = 'complete'").all('%' + city.split(',')[0].toLowerCase() + '%');
+// Save ALL completed leads — pipeline already cleaned the table
+const leads = db.prepare("SELECT id, business_name as businessName, phone, website, address, city, rating, reviews, category, email, enriched_email as enrichedEmail FROM leads WHERE enrichment_status = 'complete'").all();
 const d = new Date().toISOString().split('T')[0];
 const name = city + ' ' + service + ' - ' + d;
 

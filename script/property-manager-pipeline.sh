@@ -112,10 +112,11 @@ docker exec -w /app $BCK node -e "
 const D=require('better-sqlite3');
 const db=new D('/app/data/leads.db');
 const city='$CITY';
-const t=db.prepare('SELECT COUNT(*) as cnt FROM leads WHERE city=?').get(city);
-const e=db.prepare(\"SELECT COUNT(*) as cnt FROM leads WHERE city=? AND (email!='' OR enriched_email!='')\").get(city);
-const w=db.prepare(\"SELECT COUNT(*) as cnt FROM leads WHERE city=? AND website!=''\").get(city);
-console.log('$CITY - TOTAL:'+t.cnt+'|EMAILS:'+e.cnt+'|WEBSITES:'+w.cnt);
+const t=db.prepare('SELECT COUNT(*) as cnt FROM leads').get();
+const e=db.prepare(\"SELECT COUNT(*) as cnt FROM leads WHERE (email!='' OR enriched_email!='')\").get();
+const w=db.prepare(\"SELECT COUNT(*) as cnt FROM leads WHERE website!=''\").get();
+const p=db.prepare(\"SELECT COUNT(*) as cnt FROM leads WHERE phone!=''\").get();
+console.log('$CITY - TOTAL:'+t.cnt+'|EMAILS:'+e.cnt+'|WEBSITES:'+w.cnt+'|PHONES:'+p.cnt);
 "
 echo ""
 echo "=== $CITY PIPELINE DONE ==="
