@@ -98,7 +98,7 @@ done
 
 # --- STEP 6: SAVE TO ENRICHED GROUPS (city only) ---
 echo "=== 6/7: SAVE TO ENRICHED GROUPS ==="
-docker exec -w /app $BCK node save_enriched.js "$CITY"
+docker exec -w /app $BCK node save_enriched.js "$CITY" "HVAC" $INT_PORT
 
 # --- STEP 7: REPORT ---
 echo "=== 7/7: REPORT ==="
