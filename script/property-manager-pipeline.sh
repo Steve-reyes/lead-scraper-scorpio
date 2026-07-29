@@ -1,20 +1,22 @@
 #!/bin/sh
 # Property Manager Lead Pipeline — POSIX sh (runs on Alpine/busybox)
-# Usage: sh property-manager-pipeline.sh "City" "VPS1|VPS3" "Province, Canada"
-#   City:     "Vancouver"
+# Usage: sh property-manager-pipeline.sh "Label" "VPS1|VPS3" "Location" "RadiusKm"
+#   Label:    Name for the saved group (e.g. "Nanaimo Vancouver")
 #   VPS:      VPS1 (local) or VPS3 (remote)
-#   Location: "Vancouver, British Columbia, Canada" (default: "[City], Ontario, Canada")
+#   Location: "2250 Nanaimo Street, Vancouver, BC" or "Vancouver, Ontario, Canada" (default: "[Label], Ontario, Canada")
+#   Radius:   Radius in km (default: empty = city-wide, max 50)
 # Example: sh property-manager-pipeline.sh "Toronto" VPS1
-# Example: sh property-manager-pipeline.sh "Calgary" VPS3 "Calgary, Alberta, Canada"
+# Example: sh property-manager-pipeline.sh "Nanaimo Vancouver" VPS1 "2250 Nanaimo Street, Vancouver, BC" 10
 
 CITY="$1"
 VPS="${2:-VPS1}"
 LOCATION="${3:-$CITY, Ontario, Canada}"
+RADIUS="${4:-}"
 
 if [ -z "$CITY" ]; then
-  echo "Usage: sh property-manager-pipeline.sh \"City\" [VPS1|VPS3] [\"Location\"]"
+  echo "Usage: sh property-manager-pipeline.sh \"Label\" [VPS1|VPS3] [\"Location\"] [RadiusKm]"
   echo "Example: sh property-manager-pipeline.sh \"Toronto\" VPS1"
-  echo "Example: sh property-manager-pipeline.sh \"Vancouver\" VPS3 \"Vancouver, British Columbia, Canada\""
+  echo "Example: sh property-manager-pipeline.sh \"Nanaimo Vancouver\" VPS1 \"2250 Nanaimo Street, Vancouver, BC\" 10"
   exit 1
 fi
 
@@ -56,9 +58,13 @@ OLD_IFS="$IFS"
 IFS="|"
 for kw in $KW_LIST; do
   echo "  > $kw"
+  RADIUS_JSON=""
+  if [ -n "$RADIUS" ]; then
+    RADIUS_JSON=",\"radius\":$RADIUS"
+  fi
   curl -s -X POST "$API/api/search" \
     -H "Content-Type: application/json" \
-    -d "{\"keyword\":\"$kw\",\"location\":\"$LOCATION\",\"country\":\"Canada\",\"maxResults\":500}" -o /dev/null
+    -d "{\"keyword\":\"$kw\",\"location\":\"$LOCATION\",\"country\":\"Canada\",\"maxResults\":500$RADIUS_JSON}" -o /dev/null
   sleep 30
 done
 IFS="$OLD_IFS"
