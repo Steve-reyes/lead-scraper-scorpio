@@ -119,3 +119,9 @@ console.log('$CITY - TOTAL:'+t.cnt+'|EMAILS:'+e.cnt+'|WEBSITES:'+w.cnt);
 "
 echo ""
 echo "=== $CITY PIPELINE DONE ==="
+
+# --- STEP 8: PUSH TO GITHUB ---
+echo "=== 8/8: PUSH TO GITHUB ==="
+bash /root/property-management-enriched-leads/push_pm_enriched.sh "$CITY" "${VPS#VPS}" 2>&1
+echo ""
+echo "=== $CITY PIPELINE FULLY DONE ==="
