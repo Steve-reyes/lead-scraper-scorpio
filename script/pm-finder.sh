@@ -14,9 +14,10 @@ echo "=== PM FINDER: $ADDRESS ==="
 echo ""
 
 # --- STEP 1: CLEAN ---
-echo "=== 1/6: CLEAN DB ==="
+echo "=== 1/6: CLEAN DB + TMP ==="
 docker exec $BCK sh -c 'sqlite3 /app/data/leads.db "DELETE FROM leads;"'
 docker exec -w /app $BCK node cleanup.js 2>/dev/null
+rm -f /tmp/pending_leads.json /tmp/pm_raw.json /tmp/pm_finder_output.csv
 echo "  Done"
 
 # --- STEP 2: SEARCH GOOGLE MAPS ---
@@ -27,22 +28,32 @@ echo "  > Searching: \"$ADDRESS\""
 curl -s -X POST "$API/api/search" \
   -H "Content-Type: application/json" \
   -d "{\"keyword\":\"$ADDRESS\",\"location\":\"$CITY\",\"country\":\"Canada\",\"maxResults\":20}" -o /dev/null
-echo "  Waiting 35s..."
-sleep 35
 
 # Search 2: address + property management
 echo "  > Searching: \"$ADDRESS property management\""
 curl -s -X POST "$API/api/search" \
   -H "Content-Type: application/json" \
   -d "{\"keyword\":\"$ADDRESS property management\",\"location\":\"$CITY\",\"country\":\"Canada\",\"maxResults\":20}" -o /dev/null
-echo "  Waiting 35s..."
-sleep 35
+
+# Wait for results to land in DB (loop until we have data)
+echo "  Waiting for results..."
+WAIT=0
+while [ $WAIT -lt 20 ]; do
+  WAIT=$((WAIT + 1))
+  sleep 15
+  COUNT=$(docker exec $BCK sh -c 'sqlite3 /app/data/leads.db "SELECT COUNT(*) FROM leads;"' 2>/dev/null || echo "0")
+  echo "  [$(date "+%H:%M")] $COUNT leads so far"
+  if [ "$COUNT" -ge 3 ] 2>/dev/null; then
+    echo "  Results received"
+    break
+  fi
+done
 
 echo "  Done"
 
 # --- STEP 3: CHECK RESULTS ---
 echo "=== 3/6: CHECK RESULTS ==="
-COUNT=$(docker exec $BCK sh -c 'sqlite3 /app/data/leads.db "SELECT COUNT(*) FROM leads;"')
+COUNT=$(docker exec $BCK sh -c 'sqlite3 /app/data/leads.db "SELECT COUNT(*) FROM leads;"' 2>/dev/null || echo "0")
 echo "  Leads found: $COUNT"
 docker exec $BCK sh -c "sqlite3 -json /app/data/leads.db \"SELECT id, business_name, address, city, rating, category FROM leads ORDER BY id;\"" 2>/dev/null | python3 -c "
 import sys, json
